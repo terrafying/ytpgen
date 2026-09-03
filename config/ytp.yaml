@@ -1,0 +1,19 @@
+# ytpgen configuration. Override any key from src/ytpgen/config.py DEFAULTS.
+workspace: /Volumes/evol/ytpgen
+
+model_size: base
+compute_type: int8
+language: en
+
+scene:
+  threshold: 27.0        # ffmpeg scene-detect sensitivity (0-100 scale/100)
+  min_scene_len_s: 1.0
+
+download:
+  height: 720
+  format: "bestvideo[height<=720]+bestaudio/best[height<=720]"
+
+compose:
+  fps: 30
+  width: 1280
+  height: 720

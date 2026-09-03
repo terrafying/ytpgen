@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}ytpgen{% endblock %}</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d;
+    --text: #e6edf3; --dim: #8b949e; --accent: #58a6ff;
+    --ok: #3fb950; --err: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 14px; line-height: 1.5; margin: 0;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  header {
+    display: flex; gap: 1.25rem; align-items: center;
+    padding: 0.75rem 1.25rem; background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  header .brand { font-weight: bold; color: var(--text); }
+  nav a { margin-right: 0.9rem; color: var(--dim); }
+  nav a:hover, nav a.active { color: var(--accent); }
+  main { max-width: 1100px; margin: 1.25rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.2rem; margin: 0.5rem 0 1rem; }
+  h2 { font-size: 1rem; margin: 1.25rem 0 0.5rem; color: var(--dim); }
+  table { border-collapse: collapse; margin: 0.5rem 0; }
+  th, td { border: 1px solid var(--border); padding: 0.3rem 0.7rem; text-align: left; }
+  th { color: var(--dim); font-weight: normal; background: var(--panel); }
+  .panel { background: var(--panel); border: 1px solid var(--border);
+           border-radius: 6px; padding: 1rem; margin: 1rem 0; }
+  .flash { padding: 0.55rem 0.9rem; border-radius: 6px; margin: 0.5rem 0;
+           border: 1px solid var(--border); }
+  .flash.ok { color: var(--ok); border-color: var(--ok); }
+  .flash.error { color: var(--err); border-color: var(--err); }
+  input[type=text], input[type=number], textarea, select {
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 0.4rem 0.55rem; font: inherit; width: 100%;
+  }
+  textarea { min-height: 10rem; }
+  input[type=number] { width: 8rem; }
+  button, .btn {
+    background: #21262d; color: var(--accent); border: 1px solid var(--border);
+    border-radius: 4px; padding: 0.4rem 0.9rem; font: inherit; cursor: pointer;
+    display: inline-block; margin: 0.25rem 0;
+  }
+  button:hover, .btn:hover { border-color: var(--accent); text-decoration: none; }
+  .muted { color: var(--dim); }
+  .wordlist { display: flex; flex-wrap: wrap; gap: 0.3rem 0.55rem; }
+  .wordlist a { border: 1px solid var(--border); border-radius: 4px;
+                padding: 0.1rem 0.45rem; background: var(--panel); }
+  .pager { margin-top: 0.75rem; display: flex; gap: 0.75rem; align-items: center; }
+  video { max-width: 320px; border: 1px solid var(--border); border-radius: 4px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  .empty { color: var(--dim); font-style: italic; }
+</style>
+</head>
+<body>
+<header>
+  <a class="brand" href="{{ url_for('dashboard') }}">ytpgen</a>
+  <nav>
+    <a href="{{ url_for('dashboard') }}">dashboard</a>
+    <a href="{{ url_for('words') }}">words</a>
+    <a href="{{ url_for('edl_list') }}">edls</a>
+    <a href="{{ url_for('generate') }}">generate</a>
+    <a href="{{ url_for('auto') }}">auto</a>
+  </nav>
+  <span class="muted" style="margin-left:auto">{{ workspace_name }}</span>
+</header>
+<main>
+  {% with msgs = get_flashed_messages(with_categories=true) %}
+    {% for cat, m in msgs %}<div class="flash {{ cat }}">{{ m }}</div>{% endfor %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

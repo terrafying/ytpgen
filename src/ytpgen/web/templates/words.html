@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}words — ytpgen{% endblock %}
+{% block content %}
+<h1>Words ({{ total }})</h1>
+{% if words %}
+<div class="wordlist">
+  {% for w in words %}<a href="{{ url_for('word_detail', word=w) }}">{{ w }}</a>{% endfor %}
+</div>
+{% else %}
+<p class="empty">No words indexed yet — analyze some sources first.</p>
+{% endif %}
+<div class="pager">
+  {% if page > 1 %}<a href="{{ url_for('words', page=page-1) }}">&larr; prev</a>{% endif %}
+  <span class="muted">page {{ page }} / {{ pages }}</span>
+  {% if page < pages %}<a href="{{ url_for('words', page=page+1) }}">next &rarr;</a>{% endif %}
+</div>
+{% endblock %}

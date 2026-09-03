@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}auto — ytpgen{% endblock %}
+{% block content %}
+<h1>Auto-poop</h1>
+<div class="panel">
+<form method="post" action="{{ url_for('auto') }}">
+  <p>
+    <label>video_id<br>
+    <input type="text" name="video_id" list="sources" placeholder="e.g. dQw4w9WgXcQ">
+    </label>
+  </p>
+  <datalist id="sources">
+    {% for s in sources %}<option value="{{ s.video_id }}">{{ s.title }}</option>{% endfor %}
+  </datalist>
+  <p>
+    <label>target seconds<br>
+    <input type="number" name="target" value="60" min="1" max="600">
+    </label>
+  </p>
+  <button type="submit">Plan + render</button>
+</form>
+</div>
+<p class="muted">Plans a YTP-style edit from one analyzed source (synchronous render).</p>
+{% endblock %}

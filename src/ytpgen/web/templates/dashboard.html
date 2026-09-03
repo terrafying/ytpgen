@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}dashboard — ytpgen{% endblock %}
+{% block content %}
+<h1>Library</h1>
+
+<h2>Stats</h2>
+<table>
+  <tr><th>total_sources</th><td>{{ stats.total_sources }}</td></tr>
+  <tr><th>total_scenes</th><td>{{ stats.total_scenes }}</td></tr>
+  <tr><th>total_words</th><td>{{ stats.total_words }}</td></tr>
+  <tr><th>unique_words</th><td>{{ stats.unique_words }}</td></tr>
+  <tr><th>total_phones</th><td>{{ stats.total_phones }}</td></tr>
+</table>
+
+<h2>Sources</h2>
+{% if sources %}
+<table>
+  <tr><th>video_id</th><th>title</th><th>duration_s</th><th>scenes</th><th>words</th></tr>
+  {% for s in sources %}
+  <tr>
+    <td>{{ s.video_id }}</td>
+    <td>{{ s.title or '—' }}</td>
+    <td>{{ '%.1f'|format(s.duration_s) }}</td>
+    <td>{{ s.scenes }}</td>
+    <td>{{ s.words }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="empty">No sources yet — ingest something below.</p>
+{% endif %}
+
+<div class="grid2">
+  <div class="panel">
+    <h2 style="margin-top:0">Ingest URL(s)</h2>
+    <form method="post" action="{{ url_for('ingest') }}">
+      <textarea name="urls" placeholder="https://youtu.be/... (one per line)"></textarea>
+      <button type="submit">Ingest</button>
+    </form>
+  </div>
+  <div class="panel">
+    <h2 style="margin-top:0">Analyze</h2>
+    <p class="muted">Scene-detect + transcribe every source that is missing analysis.</p>
+    <form method="post" action="{{ url_for('analyze') }}">
+      <button type="submit">Analyze all</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

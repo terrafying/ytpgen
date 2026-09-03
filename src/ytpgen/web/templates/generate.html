@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}generate — ytpgen{% endblock %}
+{% block content %}
+<h1>Generate</h1>
+<div class="panel">
+<form method="post" action="{{ url_for('generate') }}">
+  <p><textarea name="text" placeholder="Type a sentence; the library says it"></textarea></p>
+  <p>
+    <label>mode
+      <select name="mode">
+        <option value="hybrid">hybrid</option>
+        <option value="word">word</option>
+        <option value="phone">phone</option>
+      </select>
+    </label>
+  </p>
+  <button type="submit">Generate + render</button>
+</form>
+</div>
+<p class="muted">Resolves each word from the index, saves an EDL, and renders an mp4
+(synchronous — may take a while).</p>
+{% endblock %}

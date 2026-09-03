@@ -1,0 +1,341 @@
+"""Local web UI: browse the library, generate poops, edit EDLs.
+
+create_app(cfg) -> Flask, served by ``ytp serve`` (127.0.0.1 only).
+Heavy work runs synchronously inside POST handlers; failures are caught
+and flashed. The db connection is opened per-request via flask.g.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+
+from flask import (
+    Flask,
+    abort,
+    current_app,
+    flash,
+    g,
+    redirect,
+    render_template,
+    request,
+    send_from_directory,
+    url_for,
+)
+
+from ytpgen.config import workspace_dir
+from ytpgen.index import Index
+
+logger = logging.getLogger(__name__)
+
+WORDS_PER_PAGE = 100
+OCCURRENCE_LIMIT = 20
+_EDL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
+MEDIA_EXTS = {
+    ".mp4", ".m4v", ".mov", ".webm", ".mkv", ".mp3",
+    ".m4a", ".wav", ".jpg", ".jpeg", ".png", ".gif", ".webp",
+}
+
+
+def create_app(cfg: dict) -> Flask:
+    app = Flask(__name__)
+    app.secret_key = "ytpgen-local-ui"  # localhost-only tool UI
+    app.config["WORKSPACE"] = workspace_dir(cfg)
+    app.config["COMPOSE_CFG"] = cfg.get("compose", {})
+    app.config["CFG"] = cfg
+    app.jinja_env.globals["workspace_name"] = Path(cfg["workspace"]).name
+
+    @app.teardown_appcontext
+    def close_db(_exc) -> None:  # pragma: no cover - flask plumbing
+        idx = g.pop("ytp_db", None)
+        if idx is not None:
+            idx.conn.close()
+
+    _register_routes(app)
+    return app
+
+
+def get_db() -> Index:
+    """Per-request Index (closed at request teardown)."""
+    if "ytp_db" not in g:
+        g.ytp_db = Index(app_workspace() / "index.db")
+    return g.ytp_db
+
+
+def app_workspace() -> Path:
+    return Path(current_app.config["WORKSPACE"])
+
+
+# --- safe path helpers (never expose anything outside the workspace) ---
+
+
+def _safe_rel_path(rel: str) -> Path:
+    """Resolve *rel* under the workspace; 404 on traversal or escape."""
+    ws = app_workspace().resolve()
+    try:
+        target = (ws / rel).resolve()
+    except (OSError, ValueError):
+        abort(404)
+    if target != ws and ws not in target.parents:
+        abort(404)
+    return target
+
+
+def _edl_path(name: str) -> Path:
+    """outputs/<name> for a validated EDL file name; 404 otherwise."""
+    if not _EDL_NAME_RE.match(name) or ".." in name:
+        abort(404)
+    return app_workspace() / "outputs" / name
+
+
+def _out_dir() -> Path:
+    d = app_workspace() / "outputs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _slug(text: str) -> str:
+    slug = _SLUG_RE.sub("_", text.strip().lower())[:40].strip("_")
+    return slug or "untitled"
+
+
+def _save_and_render(edl, base: str) -> Path:
+    """Save outputs/<base>.edl.json and render outputs/<base>.mp4."""
+    from ytpgen.compose.edl import save_edl
+    from ytpgen.compose.renderer import Renderer
+
+    save_edl(edl, _out_dir() / f"{base}.edl.json")
+    return Renderer(current_app.config["CFG"]).render(edl, _out_dir() / f"{base}.mp4")
+
+
+# --- routes ---
+
+
+def _register_routes(app: Flask) -> None:
+    @app.route("/")
+    def dashboard():
+        db = get_db()
+        sc = dict(db.conn.execute(
+            "SELECT source_id, COUNT(*) FROM scenes GROUP BY source_id"
+        ).fetchall())
+        wd = dict(db.conn.execute(
+            "SELECT source_id, COUNT(*) FROM words GROUP BY source_id"
+        ).fetchall())
+        sources = [{"video_id": r["video_id"], "title": r["title"],
+                    "duration_s": r["duration_s"], "scenes": sc.get(r["id"], 0),
+                    "words": wd.get(r["id"], 0)} for r in db.all_sources()]
+        return render_template("dashboard.html", stats=db.stats(), sources=sources)
+
+    @app.route("/ingest", methods=["POST"])
+    def ingest():
+        urls = [u.strip() for u in request.form.get("urls", "").splitlines() if u.strip()]
+        if not urls:
+            flash("No URLs submitted.", "error")
+            return redirect(url_for("dashboard"))
+        try:
+            from ytpgen.acquire.ingest import Ingestor
+
+            ing = Ingestor(app.config["CFG"], get_db().conn)
+            added = skipped = failed = 0
+            for url in urls:
+                res = ing.ingest(url, force=False)  # one target per call
+                added += int(res.get("added", 0))
+                skipped += int(res.get("skipped", 0))
+                failed += int(res.get("downloads_failed", 0))
+            flash(f"Ingest done: added {added}, skipped {skipped}, failed {failed}.", "ok")
+        except Exception as exc:  # noqa: BLE001 — surfaced to the user
+            logger.exception("ingest failed")
+            flash(f"Ingest failed: {exc}", "error")
+        return redirect(url_for("dashboard"))
+
+    @app.route("/analyze", methods=["POST"])
+    def analyze():
+        try:
+            from ytpgen.analyze.segment import Segmenter
+        except Exception:  # noqa: BLE001 — module may not exist yet
+            logger.exception("analyzer import failed")
+            flash("Analyzer module not ready — cannot analyze yet.", "error")
+            return redirect(url_for("dashboard"))
+        from ytpgen.models import SourceVideo
+
+        db = get_db()
+        seg = Segmenter(app.config["CFG"], db.conn)
+        analyzed = {r[0] for r in db.conn.execute(
+            "SELECT source_id FROM scenes INTERSECT SELECT source_id FROM words")}
+        done = errors = 0
+        try:
+            for row in db.all_sources():
+                if row["id"] in analyzed:
+                    continue  # already analyzed
+                sv = SourceVideo(video_id=row["video_id"], title=row["title"],
+                                 local_path=row["local_path"])
+                res = seg.analyze(sv, db.conn)
+                if res.get("error"):
+                    errors += 1
+                else:
+                    done += 1
+            flash(f"Analyzed {done} source(s), {errors} error(s).", "ok")
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("analyze failed")
+            flash(f"Analyze failed: {exc}", "error")
+        return redirect(url_for("dashboard"))
+
+    @app.route("/words")
+    def words():
+        all_w = get_db().all_words()
+        total = len(all_w)
+        pages = max(1, -(-total // WORDS_PER_PAGE))
+        page = min(pages, max(1, request.args.get("page", 1, type=int) or 1))
+        chunk = all_w[(page - 1) * WORDS_PER_PAGE: page * WORDS_PER_PAGE]
+        return render_template("words.html", words=chunk, page=page, pages=pages, total=total)
+
+    @app.route("/words/<word>")
+    def word_detail(word: str):
+        db = get_db()
+        hits = db.find_word(word, limit=OCCURRENCE_LIMIT)
+        ws = app_workspace().resolve()
+        titles = {
+            r["id"]: (r["title"] or r["video_id"])
+            for r in db.conn.execute("SELECT id, title, video_id FROM sources")
+        }
+        for h in hits:
+            h["source_title"] = titles.get(h["source_id"], "?")
+            rel = Path(h["local_path"]).resolve()
+            if rel.is_file() and ws in rel.parents:
+                span = f"#t={h['start_s']:.2f},{h['end_s']:.2f}"
+                h["media_url"] = "/media/" + rel.relative_to(ws).as_posix() + span
+            else:
+                h["media_url"] = None
+        return render_template("word_detail.html", word=word, hits=hits)
+
+    @app.route("/edl")
+    def edl_list():
+        from ytpgen.compose.edl import load_edl
+
+        files = []
+        for p in sorted(_out_dir().glob("*.edl.json")):
+            try:
+                n_events = len(load_edl(p).events)
+            except Exception:  # noqa: BLE001 — list corrupt files too
+                n_events = -1
+            files.append({
+                "name": p.name, "path": str(p), "events": n_events,
+                "created": datetime.fromtimestamp(
+                    p.stat().st_mtime, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")})
+        return render_template("edl_list.html", files=files)
+
+    @app.route("/edl/<name>")
+    def edl_detail(name: str):
+        path = _edl_path(name)
+        if not path.is_file():
+            abort(404)
+        return render_template(
+            "edl_detail.html", name=name,
+            content=path.read_text(encoding="utf-8"),
+            rendered=name[: -len(".edl.json")] + ".mp4",
+        )
+
+    @app.route("/edl/<name>", methods=["POST"])
+    def edl_save(name: str):
+        path = _edl_path(name)
+        from ytpgen.models import EDL
+
+        try:  # validate before overwriting; keep old file on bad input
+            EDL.model_validate_json(request.form.get("content", ""))
+        except Exception as exc:  # noqa: BLE001
+            flash(f"Invalid EDL JSON: {exc}", "error")
+        else:
+            path.write_text(request.form.get("content", ""), encoding="utf-8")
+            flash(f"Saved {name}.", "ok")
+        return redirect(url_for("edl_detail", name=name))
+
+    @app.route("/edl/<name>/render", methods=["POST"])
+    def edl_render(name: str):
+        path = _edl_path(name)
+        if not path.is_file():
+            abort(404)
+        try:
+            from ytpgen.compose.edl import load_edl
+            from ytpgen.compose.renderer import Renderer
+
+            edl = load_edl(path)
+            out = _save_and_render(edl, name[: -len(".edl.json")])
+            flash(f"Rendered to {out}", "ok")
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("render failed")
+            flash(f"Render failed: {exc}", "error")
+        return redirect(url_for("edl_detail", name=name))
+
+    @app.route("/generate", methods=["GET", "POST"])
+    def generate():
+        if request.method == "GET":
+            return render_template("generate.html")
+        text = request.form.get("text", "").strip()
+        mode = request.form.get("mode", "hybrid")
+        mode = mode if mode in ("word", "phone", "hybrid") else "hybrid"
+        if not text:
+            flash("No text submitted.", "error")
+            return redirect(url_for("generate"))
+        try:
+            from ytpgen.compose.matcher import Matcher
+
+            clips = Matcher(app.config["CFG"]).resolve_sentence(
+                text, get_db(), mode=mode
+            )
+            if not clips:
+                flash("No clips matched — ingest + analyze sources first.", "error")
+                return redirect(url_for("generate"))
+            c = app.config["COMPOSE_CFG"]
+            edl = Matcher.edl_from_clips(
+                clips, fps=c.get("fps", 30), width=c.get("width", 1280),
+                height=c.get("height", 720),
+            )
+            base = "gen_" + _slug(text)
+            out = _save_and_render(edl, base)
+            flash(f"Generated {base} ({len(edl.events)} events) -> {out}", "ok")
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("generate failed")
+            flash(f"Generate failed: {exc}", "error")
+            return redirect(url_for("generate"))
+        return redirect(url_for("edl_detail", name=f"{base}.edl.json"))
+
+    @app.route("/auto", methods=["GET", "POST"])
+    def auto():
+        if request.method == "GET":
+            sources = [{"video_id": r["video_id"], "title": r["title"]}
+                       for r in get_db().all_sources()]
+            return render_template("auto.html", sources=sources)
+        video_id = request.form.get("video_id", "").strip()
+        target = request.form.get("target", 60, type=int) or 60
+        if not video_id:
+            flash("No video id submitted.", "error")
+            return redirect(url_for("auto"))
+        try:
+            from ytpgen.compose.auto import AutoPooper
+
+            edl = AutoPooper(app.config["CFG"], get_db().conn).plan(
+                video_id, target_s=target
+            )
+            if not edl.events:
+                flash("Plan produced no events — analyze the video first.", "error")
+                return redirect(url_for("auto"))
+            base = "auto_" + _slug(video_id)
+            out = _save_and_render(edl, base)
+            flash(f"Auto {base} ({len(edl.events)} events) -> {out}", "ok")
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("auto plan failed")
+            flash(f"Auto plan failed: {exc}", "error")
+            return redirect(url_for("auto"))
+        return redirect(url_for("edl_detail", name=f"{base}.edl.json"))
+
+    @app.route("/media/<path:rel>")
+    def media(rel: str):
+        target = _safe_rel_path(rel)  # resolved + guaranteed inside workspace
+        if not target.is_file() or target.suffix.lower() not in MEDIA_EXTS:
+            abort(404)
+        ws = app_workspace().resolve()
+        return send_from_directory(
+            ws, target.relative_to(ws).as_posix(), conditional=True)
