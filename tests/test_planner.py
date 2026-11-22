@@ -126,3 +126,10 @@ def test_scene_tags_flow_into_phrases_listing_and_judge(db):
 
     r = judge({}, [{"p": 0}, {"p": 3}], by_id, llm=llm)
     assert "on_screen" in seen["p"] and r["congruent"] == pytest.approx(0.5)
+
+
+def test_plan_cost_penalises_one_film_dominating():
+    mk = lambda sid, t: Clip(local_path=str(sid), start_s=t, end_s=t + 1, source_id=sid, text="a b", kind="phrase")
+    mono = [mk(1, 0), mk(1, 100), mk(1, 200), mk(1, 300)]
+    mixed = [mk(1, 0), mk(2, 0), mk(1, 300), mk(3, 0)]
+    assert plan_cost(mixed, 0) < plan_cost(mono, 0)

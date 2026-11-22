@@ -29,6 +29,8 @@ SPLICE_COST = 0.5  # every cut, on top of the clip's kind cost
 SOURCE_CHANGE_COST = 0.25
 RETELL_COST = 1.5  # next clip is just what came next in the film: retelling, not recontextualising
 RETELL_GAP_S = 2.0
+DOMINANCE_COST = 2.0  # per word, scaled by how far one film's share of clips exceeds MAX_SHARE
+MAX_SHARE = 0.5  # the LLM gravitates to the most famous film (Duck and Cover) and retells it
 MISSING_COST = 5.0  # a glue word nothing could say
 MAX_PHRASES = 1500  # shortcut: random sample above this; upgrade to retrieval for multi-hour libraries
 
@@ -50,7 +52,8 @@ Rules:
   stitched from single words or syllables and sound worse, so use them rarely.
 - Do NOT retell the original films. Pull lines out of their context and set them against lines
   from elsewhere (other scenes, other films) so they mean something new. Never use two lines
-  that follow each other in the original.
+  that follow each other in the original. Draw on at least three different films, and no
+  film should supply more than half the lines.
 - When scenes are described (## headers say who is on screen), make the cuts make visual sense
   too: keep the same character on screen through a back-and-forth, cut to a matching or reaction
   shot, and only put a line over a mismatched face when that mismatch is the joke.
@@ -98,7 +101,8 @@ def plan_cost(clips: list[Clip], missing: int) -> float:
                               for a, b in zip(clips, clips[1:]))
     cost += MISSING_COST * missing
     words = sum(len(c.text.split()) for c in clips if c.kind != "phone") or 1
-    return cost / words
+    top = max(sum(c.source_id == s for c in clips) for s in {c.source_id for c in clips}) / len(clips)
+    return cost / words + DOMINANCE_COST * max(0.0, top - MAX_SHARE)
 
 
 def _words(text: str) -> list[str]:
