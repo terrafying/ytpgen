@@ -133,6 +133,59 @@ def cmd_auto(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_plan(args: argparse.Namespace) -> int:
+    """v0.2: LLM writes with the footage; render the cheapest drafts, keep the most comprehensible."""
+    from ytpgen.compose.edl import save_edl
+    from ytpgen.compose.judge import judge
+    from ytpgen.compose.matcher import Matcher
+    from ytpgen.compose.phrases import derive_phrases
+    from ytpgen.compose.planner import make_plans
+    from ytpgen.compose.renderer import Renderer
+    from ytpgen.compose.verify import transcribe, wer
+
+    cfg = _open_config(args)
+    db = _db(cfg)
+    phrases = derive_phrases(db.conn)
+    if not phrases:
+        print("No phrases — run `ytp ingest` and `ytp analyze` first.", file=sys.stderr)
+        return 1
+    plans = make_plans(cfg, db, phrases, args.tone, args.theme, seconds=args.seconds,
+                       n=args.drafts, seed=args.seed)
+    if not plans:
+        print("Planner produced no usable drafts.", file=sys.stderr)
+        return 1
+    by_id = {p.id: p for p in phrases}
+    for k, plan in enumerate(plans):
+        try:
+            plan.judged = judge(cfg, plan.lines, by_id, seed=args.seed + k)
+        except Exception as exc:  # noqa: BLE001 - an unjudged draft just ranks last
+            plan.judged = {"score": 0.0, "why": f"judge failed: {exc}"}
+        print(f"  draft {plan.title!r}: unexpected congruence {plan.judged['score']:.2f}  cost {plan.cost:.2f}")
+    plans.sort(key=lambda p: (-p.judged["score"], p.cost))
+    out = Path(args.output)
+    results = []
+    for k, plan in enumerate(plans[: args.render]):
+        edl = Matcher.edl_from_clips(plan.clips, fps=cfg["compose"]["fps"],
+                                     width=cfg["compose"]["width"], height=cfg["compose"]["height"])
+        path = out.with_name(f"{out.stem}.{k}{out.suffix}")
+        save_edl(edl, path.with_suffix(".edl.json"))
+        Renderer(cfg).render(edl, path)
+        heard = transcribe(cfg, path)
+        score = wer(plan.intended, heard)
+        results.append({"file": str(path), "title": plan.title, "cost": round(plan.cost, 3),
+                        "unexpected_congruence": plan.judged,
+                        "wer": round(score, 3), "missing": plan.missing, "intended": plan.intended,
+                        "heard": heard.strip(), "lines": plan.lines})
+        print(f"[{k}] {plan.title!r}  uc={plan.judged['score']:.2f}  cost={plan.cost:.2f}  wer={score:.2f}  {path}")
+    results.sort(key=lambda r: (r["wer"] > args.max_wer, -r["unexpected_congruence"]["score"], r["cost"]))
+    out.with_suffix(".plan.json").write_text(json.dumps(results, indent=1))
+    best = results[0]
+    print(f"best: {best['file']}  ({best['title']!r}, wer={best['wer']})")
+    print(f"  intended: {best['intended']}")
+    print(f"  heard:    {best['heard']}")
+    return 0
+
+
 def cmd_render(args: argparse.Namespace) -> int:
     from ytpgen.compose.edl import load_edl
     from ytpgen.compose.renderer import Renderer
@@ -193,6 +246,17 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--target", type=int, default=60, help="Target duration seconds")
     sp.add_argument("-o", "--output", default="outputs/auto_poop.mp4")
     sp.set_defaults(func=cmd_auto)
+
+    sp = sub.add_parser("plan", help="v0.2: compose a piece from whole phrases with an LLM")
+    sp.add_argument("--tone", default="funny", help="funny | deep | free-text tone")
+    sp.add_argument("--theme", help="optional theme; omit to let the footage decide")
+    sp.add_argument("--seconds", type=int, default=30)
+    sp.add_argument("--drafts", type=int, default=4)
+    sp.add_argument("--render", type=int, default=2, help="render + verify the N cheapest drafts")
+    sp.add_argument("--max-wer", type=float, default=0.35)
+    sp.add_argument("--seed", type=int, default=0)
+    sp.add_argument("-o", "--output", default="outputs/plan.mp4")
+    sp.set_defaults(func=cmd_plan)
 
     sp = sub.add_parser("render", help="Render an existing EDL")
     sp.add_argument("edl")

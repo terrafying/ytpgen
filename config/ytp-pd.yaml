@@ -1,0 +1,8 @@
+# v0.2 public-domain test library (2026-11-22): Prelinger shorts + His Girl Friday, on the Mac's disk.
+workspace: ~/ytpgen-ws
+model_size: small.en
+compute_type: int8
+language: en
+download:
+  height: 480
+  format: "best[height<=480]/bestvideo[height<=480]+bestaudio/best"

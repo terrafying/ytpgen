@@ -12,6 +12,7 @@ Determinism: the render is a pure function of the EDL — no randomness.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
@@ -27,6 +28,9 @@ FFPROBE = shutil.which("ffprobe") or "/opt/homebrew/bin/ffprobe"
 CRF = "18"
 PRESET = "veryfast"
 AUDIO_BITRATE = "128k"
+FADE_S = 0.008
+LEVEL_TARGET_DB = -24.0  # mean (RMS) level every clip is brought to before the mix
+LEVEL_MAX_DB = 12.0  # cap so a near-silent clip isn't boosted into hiss
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
@@ -89,7 +93,20 @@ class Renderer:
     # per-event single-pass graph: extract + geometry + reverse + speed +
     # gain all in one -filter_complex
     # ------------------------------------------------------------------ #
-    def _event_filter_complex(self, ev: EDLEvent) -> tuple[str, str]:
+    def _level_db(self, ev: EDLEvent) -> float:
+        """Gain that brings this clip's mean level to LEVEL_TARGET_DB (films differ by ~6 dB)."""
+        proc = subprocess.run(
+            [self.ffmpeg, "-nostdin", "-hide_banner", "-ss", f"{max(0.0, ev.start_s):.6f}",
+             "-t", f"{ev.end_s - ev.start_s:.6f}", "-i", str(ev.local_path),
+             "-vn", "-af", "volumedetect", "-f", "null", "-"],
+            capture_output=True, text=True,
+        )
+        m = re.search(r"mean_volume: (-?[\d.]+) dB", proc.stderr)
+        if not m:
+            return 0.0
+        return max(-LEVEL_MAX_DB, min(LEVEL_MAX_DB, LEVEL_TARGET_DB - float(m.group(1))))
+
+    def _event_filter_complex(self, ev: EDLEvent, level_db: float = 0.0) -> tuple[str, str]:
         """Return (filter_complex, vout_label) for one event."""
         vparts: list[str] = []
         apart: list[str] = []
@@ -107,8 +124,14 @@ class Renderer:
             apart.append(_atempo_chain(ev.speed))
             vparts.append(f"setpts=PTS/{ev.speed:g}")
 
-        if abs(ev.gain_db) > 1e-9:
-            apart.append(f"volume={ev.gain_db:g}dB")
+        gain = ev.gain_db + level_db  # gain_db stays the hand-edited extra on top of levelling
+        if abs(gain) > 1e-9:
+            apart.append(f"volume={gain:g}dB")
+
+        # 8 ms fades at both ends: cuts land mid-waveform, and a hard edge clicks
+        dur = (ev.end_s - ev.start_s) / ev.speed
+        if dur > 4 * FADE_S:
+            apart.append(f"afade=t=in:d={FADE_S},afade=t=out:st={dur - FADE_S:.6f}:d={FADE_S}")
 
         vparts.append(
             f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,"
@@ -131,7 +154,7 @@ class Renderer:
                 f"event {ev.index} has non-positive duration "
                 f"({ev.start_s}..{ev.end_s})"
             )
-        fc, vout = self._event_filter_complex(ev)
+        fc, vout = self._event_filter_complex(ev, self._level_db(ev))
         cmd = [
             "-ss", f"{max(0.0, ev.start_s):.6f}",
             "-t", f"{duration:.6f}",
@@ -174,7 +197,7 @@ class Renderer:
                 "".join(f"[{i}:v]" for i in range(n))
                 + f"concat=n={n}:v=1:a=0[v];"
                 + "".join(f"[{i}:a]" for i in range(n))
-                + f"concat=n={n}:v=0:a=1[a]"
+                + f"concat=n={n}:v=0:a=1,loudnorm=I=-16:TP=-1.5:LRA=11,aresample=44100[a]"  # clips come from different films and mics; loudnorm outputs 192 kHz
             )
             maps = ["-map", "[v]", "-map", "[a]"]
         else:
