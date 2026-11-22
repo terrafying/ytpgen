@@ -138,8 +138,15 @@ def cmd_plan(args: argparse.Namespace) -> int:
     from ytpgen.compose.piece import make_piece
 
     cfg = _open_config(args)
+    db = _db(cfg)
+    source_ids = None
+    if args.films:  # video_id prefixes, e.g. --films ShyGuy DuckandC
+        source_ids = {r["id"] for r in db.all_sources() if any(r["video_id"].startswith(f) for f in args.films)}
+        if not source_ids:
+            print("No films match --films.", file=sys.stderr)
+            return 1
     try:
-        results = make_piece(cfg, _db(cfg), Path(args.output), args.tone, args.theme,
+        results = make_piece(cfg, db, Path(args.output), args.tone, args.theme, source_ids=source_ids,
                              seconds=args.seconds, drafts=args.drafts, render=args.render,
                              max_wer=args.max_wer, seed=args.seed, log=print)
     except RuntimeError as exc:
@@ -232,6 +239,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--render", type=int, default=2, help="render + verify the N cheapest drafts")
     sp.add_argument("--max-wer", type=float, default=0.35)
     sp.add_argument("--seed", type=int, default=0)
+    sp.add_argument("--films", nargs="+", help="only these films (video_id prefixes)")
     sp.add_argument("-o", "--output", default="outputs/plan.mp4")
     sp.set_defaults(func=cmd_plan)
 
