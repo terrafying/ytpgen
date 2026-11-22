@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YTP Remix Machine</title>
+<style>
+  :root {
+    --bg: #fff8e7; --ink: #2b2140; --card: #ffffff; --line: #2b2140;
+    --sun: #ffd23f; --go: #3bceac; --hot: #ee4266; --sky: #4cc9f0;
+    --f0: #ff8fab; --f1: #7bdff2; --f2: #b9f18c; --f3: #ffd166;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font-family: ui-rounded, "SF Pro Rounded", "Nunito", "Comic Sans MS", system-ui, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 2.2rem; margin: 8px 0 4px; letter-spacing: .5px; }
+  .tag { margin: 0 0 18px; font-size: 1.1rem; opacity: .8; }
+  .step { display: flex; align-items: center; gap: 10px; font-size: 1.4rem; font-weight: 800; margin: 26px 0 10px; }
+  .num { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%;
+         background: var(--sun); border: 3px solid var(--line); }
+  .films { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .film { position: relative; background: var(--card); border: 3px solid var(--line); border-radius: 16px;
+          padding: 6px; cursor: pointer; text-align: center; font-weight: 700; font-size: .95rem;
+          box-shadow: 0 4px 0 var(--line); transition: transform .08s; user-select: none; }
+  .film:active { transform: translateY(3px); box-shadow: 0 1px 0 var(--line); }
+  .film img, .film .noimg { width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 10px;
+          background: #ddd; display: grid; place-items: center; font-size: 2.5rem; }
+  .film .name { display: block; margin: 6px 2px 2px; line-height: 1.2; }
+  .film .pick { position: absolute; top: -10px; right: -10px; width: 40px; height: 40px; border-radius: 50%;
+          border: 3px solid var(--line); display: none; place-items: center; font-size: 1.3rem; }
+  .film.on .pick { display: grid; }
+  .film.c0 { background: var(--f0); } .film.c0 .pick { background: var(--f0); }
+  .film.c1 { background: var(--f1); } .film.c1 .pick { background: var(--f1); }
+  .film.c2 { background: var(--f2); } .film.c2 .pick { background: var(--f2); }
+  .film.c3 { background: var(--f3); } .film.c3 .pick { background: var(--f3); }
+  .hint { min-height: 1.4em; font-weight: 700; color: var(--hot); margin: 8px 0 0; }
+  .moods { display: flex; gap: 12px; flex-wrap: wrap; }
+  .mood { flex: 1 1 140px; border: 3px solid var(--line); border-radius: 18px; background: var(--card);
+          font: inherit; font-weight: 800; font-size: 1.2rem; padding: 14px 8px; cursor: pointer;
+          box-shadow: 0 4px 0 var(--line); }
+  .mood .big { display: block; font-size: 2.6rem; }
+  .mood.on { background: var(--sun); }
+  .about { width: 100%; margin-top: 12px; padding: 12px 14px; font: inherit; font-size: 1.1rem;
+           border: 3px dashed var(--line); border-radius: 14px; background: var(--card); }
+  .make { display: block; width: 100%; margin: 28px 0 10px; padding: 18px; border: 4px solid var(--line);
+          border-radius: 22px; background: var(--go); color: var(--ink); font: inherit; font-size: 2rem;
+          font-weight: 900; cursor: pointer; box-shadow: 0 6px 0 var(--line); }
+  .make:disabled { background: #ccc; cursor: not-allowed; }
+  .make:not(:disabled):hover { filter: brightness(1.05); }
+  .busy, .result { display: none; text-align: center; margin: 20px 0; }
+  .busy .spin { font-size: 4rem; display: inline-block; animation: wobble 1s infinite ease-in-out; }
+  @keyframes wobble { 0%,100% { transform: rotate(-15deg) } 50% { transform: rotate(15deg) scale(1.1) } }
+  .busy p { font-size: 1.3rem; font-weight: 800; }
+  video { width: 100%; border: 4px solid var(--line); border-radius: 18px; background: #000; }
+  .title { font-size: 1.6rem; font-weight: 900; margin: 10px 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 12px 0; }
+  .chip { border: 2px solid var(--line); border-radius: 999px; padding: 6px 12px; font-weight: 700; background: #eee; }
+  .chip.c0 { background: var(--f0); } .chip.c1 { background: var(--f1); }
+  .chip.c2 { background: var(--f2); } .chip.c3 { background: var(--f3); }
+  .chip.glue { border-style: dashed; }
+  .again { border: 3px solid var(--line); border-radius: 16px; background: var(--sky); font: inherit;
+           font-weight: 800; font-size: 1.2rem; padding: 12px 20px; cursor: pointer; box-shadow: 0 4px 0 var(--line); }
+  @media (max-width: 520px) { h1 { font-size: 1.7rem; } .make { font-size: 1.6rem; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>🎬✂️ YTP Remix Machine</h1>
+  <p class="tag">Old movies say new things. Pick some films, pick a mood, and press the big button!</p>
+
+  <div class="step"><span class="num">1</span> Pick up to {{ 4 }} films</div>
+  <div class="films">
+    {% for f in films %}
+    <div class="film" data-id="{{ f.id }}" role="button" tabindex="0" aria-pressed="false">
+      {% if f.thumb %}<img src="{{ f.thumb }}" alt="">{% else %}<div class="noimg">🎞️</div>{% endif %}
+      <span class="name">{{ f.title }}</span>
+      <span class="pick">✔</span>
+    </div>
+    {% else %}
+    <p>No films yet! Ask a grown-up to add some. 🎞️</p>
+    {% endfor %}
+  </div>
+  <p class="hint" id="hint"></p>
+
+  <div class="step"><span class="num">2</span> Pick a mood</div>
+  <div class="moods">
+    <button class="mood on" data-mood="silly"><span class="big">😂</span>Silly</button>
+    <button class="mood" data-mood="deep"><span class="big">🌌</span>Deep</button>
+    <button class="mood" data-mood="chaos"><span class="big">🌀</span>Chaos</button>
+  </div>
+  <input class="about" id="about" maxlength="120" placeholder="💭 What should it be about? (you can leave this empty)">
+
+  <button class="make" id="make" disabled>✨ MAKE IT! ✨</button>
+
+  <div class="busy" id="busy"><span class="spin">✂️</span><p id="busymsg">Snipping…</p></div>
+
+  <div class="result" id="result">
+    <div class="title" id="rtitle"></div>
+    <video id="rvideo" controls playsinline></video>
+    <div class="chips" id="chips"></div>
+    <button class="again" id="again">🔁 Make another!</button>
+  </div>
+</main>
+<script>
+const MAX = 4, picked = [];  // order of picking = colour slot
+let mood = "silly";
+const $ = id => document.getElementById(id);
+
+function refresh() {
+  document.querySelectorAll(".film").forEach(el => {
+    const i = picked.indexOf(el.dataset.id);
+    el.className = "film" + (i >= 0 ? " on c" + i : "");
+    el.setAttribute("aria-pressed", i >= 0);
+  });
+  $("make").disabled = picked.length === 0;
+  $("hint").textContent = picked.length === 0 ? "👆 Tap a film to pick it!" : "";
+}
+document.querySelectorAll(".film").forEach(el => {
+  const toggle = () => {
+    const i = picked.indexOf(el.dataset.id);
+    if (i >= 0) picked.splice(i, 1);
+    else if (picked.length < MAX) picked.push(el.dataset.id);
+    else { $("hint").textContent = "🎒 Your backpack is full! Tap a film to take it out."; return; }
+    refresh();
+  };
+  el.onclick = toggle;
+  el.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } };
+});
+document.querySelectorAll(".mood").forEach(b => b.onclick = () => {
+  mood = b.dataset.mood;
+  document.querySelectorAll(".mood").forEach(x => x.classList.toggle("on", x === b));
+});
+
+const MSGS = ["✂️ Snipping words…", "🎞️ Rewinding the old films…", "🤫 Asking the narrator nicely…",
+              "🧩 Fitting the pieces together…", "🧪 Mixing it up…", "👂 Checking you can understand it…"];
+async function make() {
+  $("make").disabled = true; $("result").style.display = "none"; $("busy").style.display = "block";
+  let n = 0; const tick = setInterval(() => $("busymsg").textContent = MSGS[++n % MSGS.length], 2500);
+  try {
+    const r = await fetch("/play/make", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({films: picked, mood, about: $("about").value})});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || "oops");
+    let s;
+    do { await new Promise(ok => setTimeout(ok, 2000));
+         s = await (await fetch(`/jobs/${j.job}/status`)).json(); } while (s.status === "queued" || s.status === "running");
+    if (s.status !== "done") throw new Error(s.error || "it broke");
+    show(s.result);
+  } catch (e) {
+    $("busy").style.display = "none"; $("hint").textContent = "😵 Uh oh: " + e.message;
+  } finally { clearInterval(tick); refresh(); }
+}
+// map server colour slots (sorted ids) back to the picking order so chips match the cards
+function show(res) {
+  const sorted = [...picked].map(Number).sort((a, b) => a - b);
+  $("busy").style.display = "none"; $("result").style.display = "block";
+  $("rtitle").textContent = "🎉 " + res.title;
+  $("rvideo").src = res.video; $("rvideo").play().catch(() => {});
+  $("chips").innerHTML = "";
+  res.chips.forEach(c => {
+    const el = document.createElement("span");
+    const slot = c.color >= 0 ? picked.indexOf(String(sorted[c.color])) : -1;
+    el.className = "chip" + (slot >= 0 ? " c" + slot : "") + (c.kind !== "phrase" ? " glue" : "");
+    el.textContent = c.text;
+    $("chips").appendChild(el);
+  });
+  $("result").scrollIntoView({behavior: "smooth"});
+}
+$("make").onclick = make;
+$("again").onclick = make;
+refresh();
+</script>
+</body>
+</html>

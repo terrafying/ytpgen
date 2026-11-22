@@ -60,8 +60,8 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     seg = Segmenter(cfg, db.conn)
 
     if args.all:
-        rows = db.all_sources()
-        video_ids = [r["video_id"] for r in rows]
+        done = set() if args.force else db.analyze_source_ids()  # don't re-transcribe a whole library
+        video_ids = [r["video_id"] for r in db.all_sources() if r["id"] not in done]
     else:
         video_ids = args.video_ids
 
@@ -134,51 +134,17 @@ def cmd_auto(args: argparse.Namespace) -> int:
 
 
 def cmd_plan(args: argparse.Namespace) -> int:
-    """v0.2: LLM writes with the footage; render the cheapest drafts, keep the most comprehensible."""
-    from ytpgen.compose.edl import save_edl
-    from ytpgen.compose.judge import judge
-    from ytpgen.compose.matcher import Matcher
-    from ytpgen.compose.phrases import derive_phrases
-    from ytpgen.compose.planner import make_plans
-    from ytpgen.compose.renderer import Renderer
-    from ytpgen.compose.verify import transcribe, wer
+    """v0.2: LLM writes with the footage; judge, render and verify the best drafts."""
+    from ytpgen.compose.piece import make_piece
 
     cfg = _open_config(args)
-    db = _db(cfg)
-    phrases = derive_phrases(db.conn)
-    if not phrases:
-        print("No phrases — run `ytp ingest` and `ytp analyze` first.", file=sys.stderr)
+    try:
+        results = make_piece(cfg, _db(cfg), Path(args.output), args.tone, args.theme,
+                             seconds=args.seconds, drafts=args.drafts, render=args.render,
+                             max_wer=args.max_wer, seed=args.seed, log=print)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
         return 1
-    plans = make_plans(cfg, db, phrases, args.tone, args.theme, seconds=args.seconds,
-                       n=args.drafts, seed=args.seed)
-    if not plans:
-        print("Planner produced no usable drafts.", file=sys.stderr)
-        return 1
-    by_id = {p.id: p for p in phrases}
-    for k, plan in enumerate(plans):
-        try:
-            plan.judged = judge(cfg, plan.lines, by_id, seed=args.seed + k)
-        except Exception as exc:  # noqa: BLE001 - an unjudged draft just ranks last
-            plan.judged = {"score": 0.0, "why": f"judge failed: {exc}"}
-        print(f"  draft {plan.title!r}: unexpected congruence {plan.judged['score']:.2f}  cost {plan.cost:.2f}")
-    plans.sort(key=lambda p: (-p.judged["score"], p.cost))
-    out = Path(args.output)
-    results = []
-    for k, plan in enumerate(plans[: args.render]):
-        edl = Matcher.edl_from_clips(plan.clips, fps=cfg["compose"]["fps"],
-                                     width=cfg["compose"]["width"], height=cfg["compose"]["height"])
-        path = out.with_name(f"{out.stem}.{k}{out.suffix}")
-        save_edl(edl, path.with_suffix(".edl.json"))
-        Renderer(cfg).render(edl, path)
-        heard = transcribe(cfg, path)
-        score = wer(plan.intended, heard)
-        results.append({"file": str(path), "title": plan.title, "cost": round(plan.cost, 3),
-                        "unexpected_congruence": plan.judged,
-                        "wer": round(score, 3), "missing": plan.missing, "intended": plan.intended,
-                        "heard": heard.strip(), "lines": plan.lines})
-        print(f"[{k}] {plan.title!r}  uc={plan.judged['score']:.2f}  cost={plan.cost:.2f}  wer={score:.2f}  {path}")
-    results.sort(key=lambda r: (r["wer"] > args.max_wer, -r["unexpected_congruence"]["score"], r["cost"]))
-    out.with_suffix(".plan.json").write_text(json.dumps(results, indent=1))
     best = results[0]
     print(f"best: {best['file']}  ({best['title']!r}, wer={best['wer']})")
     print(f"  intended: {best['intended']}")
@@ -232,7 +198,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("analyze", help="Scene-detect + transcribe + phone-index")
     sp.add_argument("video_ids", nargs="*")
-    sp.add_argument("--all", action="store_true")
+    sp.add_argument("--all", action="store_true", help="every source not analyzed yet")
+    sp.add_argument("--force", action="store_true", help="with --all: re-analyze everything")
     sp.set_defaults(func=cmd_analyze)
 
     sp = sub.add_parser("generate", help="Type a sentence; the library says it")

@@ -284,6 +284,57 @@ def _job_reroll(cfg: dict, name: str) -> dict:
     return {"edl": name, "mp4": mp4_name, "events": len(edl.events)}
 
 
+PLAY_MAX_FILMS = 4
+PLAY_MOODS = {  # button -> planner tone
+    "silly": "funny",
+    "deep": "deep",
+    "chaos": "chaotic and surreal: rapid non sequiturs, escalating absurdity, a voice that keeps "
+             "interrupting itself, ending on the strangest possible line",
+}
+
+
+def _display_title(t: str) -> str:
+    """Archive.org files titles library-style ("Date With Your Family, A"); flip the article back."""
+    m = re.match(r"^(.*), (A|An|The)$", t.strip())
+    return f"{m.group(2)} {m.group(1)}" if m else t
+
+
+def _thumb(video_id: str, local_path: str, duration_s: float | None) -> str | None:
+    """Cached poster frame (workspace/thumbs/<id>.jpg) from ~1/4 into the film."""
+    import subprocess
+
+    ws = app_workspace()
+    out = ws / "thumbs" / f"{_SLUG_RE.sub('_', video_id)}.jpg"
+    if not out.exists():
+        out.parent.mkdir(exist_ok=True)
+        at = max(1.0, (duration_s or 40.0) / 4)
+        subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-y", "-ss", f"{at:.1f}",
+                        "-i", local_path, "-frames:v", "1", "-vf", "scale=320:-2", str(out)],
+                       capture_output=True)
+    return "/media/" + out.relative_to(ws).as_posix() if out.exists() else None
+
+
+def _job_play(cfg: dict, ids: set[int], mood: str, about: str | None) -> dict:
+    from ytpgen.compose.piece import make_piece
+
+    ws = workspace_dir(cfg)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out = ws / "play" / f"{stamp}.mp4"
+    out.parent.mkdir(exist_ok=True)
+    db = Index(ws / "index.db")
+    try:
+        results = make_piece(cfg, db, out, PLAY_MOODS[mood], about, source_ids=ids,
+                             drafts=4, render=1, seed=int(datetime.now().timestamp()))
+    finally:
+        db.close()
+    best = results[0]
+    order = sorted(ids)
+    return {"video": "/media/" + Path(best["file"]).relative_to(ws).as_posix(),
+            "title": best["title"],
+            "chips": [dict(c, color=order.index(c["source_id"]) if c["source_id"] in order else -1)
+                      for c in best["chips"]]}
+
+
 # --- routes ---
 
 
@@ -481,6 +532,33 @@ def _register_routes(app: Flask) -> None:
             "auto", f"auto {video_id} ({target}s)",
             lambda: _job_auto(app.config["CFG"], video_id, target))
         return redirect(url_for("job_status", job_id=jid))
+
+    # --- /play: kid-simple "pick films, pick a mood, make it" page (v0.2) ---
+
+    @app.route("/play")
+    def play():
+        db = get_db()
+        done = db.analyze_source_ids()
+        films = [{"id": r["id"], "title": _display_title(r["title"] or r["video_id"]),
+                  "thumb": _thumb(r["video_id"], r["local_path"], r["duration_s"])}
+                 for r in db.all_sources() if r["id"] in done]
+        return render_template("play.html", films=films, moods=PLAY_MOODS)
+
+    @app.route("/play/make", methods=["POST"])
+    def play_make():
+        data = request.get_json(silent=True) or {}
+        known = get_db().analyze_source_ids()
+        try:
+            ids = {int(i) for i in data.get("films", [])} & known
+        except (TypeError, ValueError):
+            ids = set()
+        mood = data.get("mood", "silly")
+        if not ids or len(ids) > PLAY_MAX_FILMS or mood not in PLAY_MOODS:
+            return jsonify({"error": f"pick 1-{PLAY_MAX_FILMS} films and a mood"}), 400
+        about = str(data.get("about", ""))[:120].strip() or None
+        jid = get_jobs().submit("play", f"play {mood} x{len(ids)}",
+                                lambda: _job_play(app.config["CFG"], ids, mood, about))
+        return jsonify({"job": jid})
 
     @app.route("/media/<path:rel>")
     def media(rel: str):
