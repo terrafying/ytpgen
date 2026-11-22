@@ -200,3 +200,23 @@ def test_ingest_creates_missing_sources_table(tmp_path, monkeypatch):
         assert db.execute("SELECT video_id FROM sources").fetchall() == [(V1,)]
     finally:
         db.close()
+
+
+def test_ingest_local_folder_indexes_videos_in_place(tmp_path):
+    import sqlite3
+
+    from ytpgen.acquire.ingest import Ingestor as Ingester
+    from ytpgen.index import Index
+
+    inbox = tmp_path / "inbox"
+    (inbox / "sub").mkdir(parents=True)
+    (inbox / "My Clip!.mp4").write_bytes(b"x")
+    (inbox / "sub" / "other.mkv").write_bytes(b"x")
+    (inbox / "notes.txt").write_text("not a video")
+    idx = Index(tmp_path / "index.db")
+    ing = Ingester({"workspace": str(tmp_path)}, idx.conn)
+    r = ing.ingest(str(inbox))
+    assert r["added"] == 2 and sorted(r["video_ids"]) == ["local-My_Clip_", "local-other"]
+    assert ing.ingest(str(inbox))["skipped"] == 2
+    paths = {row[0] for row in idx.conn.execute("SELECT local_path FROM sources")}
+    assert str((inbox / "sub" / "other.mkv").resolve()) in paths

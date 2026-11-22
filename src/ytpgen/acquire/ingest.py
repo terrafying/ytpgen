@@ -16,6 +16,7 @@ from ytpgen.models import SourceVideo
 
 logger = logging.getLogger(__name__)
 
+LOCAL_VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".m4v", ".webm", ".avi", ".mpg", ".mpeg"}
 _MAX_PLAYLIST = 100  # hard cap on videos expanded per playlist/channel
 
 # Single-video YouTube URL shapes: watch?v=, youtu.be/, /shorts/, /embed/, /live/
@@ -251,13 +252,24 @@ class Ingestor:
         """
         targets = [target] if isinstance(target, str) else list(target)
         urls: list[str] = []
+        local: list[SourceVideo] = []
         for t in targets:
-            urls.extend(self.resolve_targets([t]))
+            if Path(t).expanduser().exists():  # local file or folder (e.g. workspace inbox/)
+                local.extend(self.local_sources(Path(t).expanduser()))
+            else:
+                urls.extend(self.resolve_targets([t]))
         # dedupe, preserve order
         seen: set[str] = set()
         urls = [u for u in urls if not (u in seen or seen.add(u))]
         added = skipped = failed = 0
         video_ids: list[str] = []
+        for video in local:
+            if not force and self._is_indexed(video.video_id):
+                skipped += 1
+                continue
+            self._insert_source(video)
+            added += 1
+            video_ids.append(video.video_id)
         for url in urls:
             try:
                 vid = _peek_video_id(url)
@@ -284,6 +296,21 @@ class Ingestor:
             "downloads_failed": failed,
             "video_ids": video_ids,
         }
+
+    def local_sources(self, path: Path) -> list[SourceVideo]:
+        """Index video files in place (a file, or every video under a folder); ids are local-<name>."""
+        files = [path] if path.is_file() else sorted(
+            f for f in path.rglob("*") if f.suffix.lower() in LOCAL_VIDEO_EXTS)
+        out = []
+        for f in files:
+            if f.suffix.lower() not in LOCAL_VIDEO_EXTS:
+                logger.warning("Skipping %s: not a video file", f)
+                continue
+            out.append(SourceVideo(
+                video_id="local-" + re.sub(r"[^A-Za-z0-9._-]+", "_", f.stem)[:80],
+                url=f.resolve().as_uri(), title=f.stem, local_path=str(f.resolve()),
+                duration_s=_ffprobe_duration(f) or 0.0))
+        return out
 
     def _is_indexed(self, vid: str) -> bool:
         row = self.db.execute(
