@@ -24,6 +24,7 @@ from ytpgen.models import Clip
 logger = logging.getLogger(__name__)
 
 PAD_HEAD_S, PAD_TAIL_S, GUARD_S = 0.04, 0.08, 0.02
+MIN_CLIP_S = 0.15
 KIND_COST = {"phrase": 0.0, "word": 1.0, "phone": 3.0}
 SPLICE_COST = 0.5  # every cut, on top of the clip's kind cost
 SOURCE_CHANGE_COST = 0.25
@@ -92,6 +93,7 @@ def phrase_clip(ph: Phrase, i: int = 0, j: int | None = None) -> Clip:
     if hi is not None:
         end = min(end, hi - GUARD_S)
     start, end = min(start, ph.starts[i]), max(end, ph.ends[j - 1])
+    end = max(end, start + MIN_CLIP_S)  # whisper sometimes times a word at zero length
     return Clip(local_path=ph.local_path, start_s=max(0.0, start), end_s=end,
                 source_id=ph.source_id, text=" ".join(ph.words[i:j]), kind="phrase")
 

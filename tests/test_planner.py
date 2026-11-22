@@ -133,3 +133,11 @@ def test_plan_cost_penalises_one_film_dominating():
     mono = [mk(1, 0), mk(1, 100), mk(1, 200), mk(1, 300)]
     mixed = [mk(1, 0), mk(2, 0), mk(1, 300), mk(3, 0)]
     assert plan_cost(mixed, 0) < plan_cost(mono, 0)
+
+
+def test_phrase_clip_never_zero_length(db):
+    from ytpgen.compose.phrases import Phrase
+
+    ph = Phrase(0, 1, "/m.mp4", ["but", "no"], [5.0, 5.0], [5.0, 5.2], prev_end_s=4.99, next_start_s=5.21)
+    c = phrase_clip(ph, 0, 1)  # zero-length "but", hemmed in by neighbours
+    assert c.end_s - c.start_s >= 0.15
