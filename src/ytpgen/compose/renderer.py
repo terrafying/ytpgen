@@ -29,6 +29,7 @@ CRF = "18"
 PRESET = "veryfast"
 AUDIO_BITRATE = "128k"
 FADE_S = 0.008
+HOLD_S = 0.35
 LEVEL_TARGET_DB = -24.0  # mean (RMS) level every clip is brought to before the mix
 LEVEL_MAX_DB = 12.0  # cap so a near-silent clip isn't boosted into hiss
 
@@ -133,6 +134,11 @@ class Renderer:
         if dur > 4 * FADE_S:
             apart.append(f"afade=t=in:d={FADE_S},afade=t=out:st={dur - FADE_S:.6f}:d={FADE_S}")
 
+        if "hold" in ev.effects:  # freeze the last frame in silence: comic timing for stingers
+            hold = round(HOLD_S * self.fps) / self.fps  # whole frames, or audio drifts ahead of video
+            vparts.append(f"tpad=stop_mode=clone:stop_duration={hold:.6f}")
+            apart.append(f"apad=pad_dur={hold:.6f}")
+
         vparts.append(
             f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,"
             f"pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2,"
@@ -143,6 +149,7 @@ class Renderer:
         # stream parameters or -c copy drifts/clicks between segments
         apart.append("aresample=44100")
         apart.append("aformat=sample_fmts=fltp:channel_layouts=stereo")
+        apart.append("apad")  # + -shortest: audio cut to exactly the video's length, so cuts don't drift
 
         fc = ",".join(vparts) + "[vout];" + ",".join(apart) + "[aout]"
         return fc, "[vout]"
@@ -166,6 +173,7 @@ class Renderer:
             "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", AUDIO_BITRATE,
             "-r", f"{self.fps:g}",
+            "-shortest",
             "-movflags", "+faststart",
             str(out_path),
         ]

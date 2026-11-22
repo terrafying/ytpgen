@@ -242,7 +242,8 @@ class Matcher:
                 reverse=False,
                 speed=1.0,
                 gain_db=0.0,
-                effects=[],
+                # stinger: 1-2 words cut out of a real line need a beat of air after them
+                effects=["hold"] if c.kind == "phrase" and len(c.text.split()) <= 2 else [],
             )
             for i, c in enumerate(clips)
         ]
