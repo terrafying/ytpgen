@@ -52,6 +52,74 @@ def _normalize_ipa(ipa: str) -> str:
     return "".join(out)
 
 
+#: Word-clip padding: whisper timestamps clip the first phoneme's attack,
+#: so breathe on both sides — clamped by _pad_clip to the parent word AND
+#: to the neighboring words' spans (never bleed into adjacent speech).
+WORD_PAD_HEAD_S = 0.035
+WORD_PAD_TAIL_S = 0.060
+PHONE_PAD_HEAD_S = 0.015
+PHONE_PAD_TAIL_S = 0.025
+_GUARD_S = 0.020  # keep-out zone before the next / after the previous word
+
+
+def _pad_clip(
+    row: dict, start: float, end: float, kind: str
+) -> tuple[float, float]:
+    """Grow [start, end) by head/tail padding without swallowing speech.
+
+    Three clamps, tightest wins:
+      - parent word bounds (word_start_s / word_end_s)
+      - previous word's end (prev_end_s) on the head side
+      - next word's start (next_start_s) on the tail side
+    so pads only ever extend into silence, never into adjacent words.
+    """
+    word_start = row.get("word_start_s")
+    word_end = row.get("word_end_s")
+    word_start = float(word_start) if word_start is not None else start
+    word_end = float(word_end) if word_end is not None else end
+    if kind == "phone":
+        head, tail = PHONE_PAD_HEAD_S, PHONE_PAD_TAIL_S
+    else:
+        head, tail = WORD_PAD_HEAD_S, WORD_PAD_TAIL_S
+
+    prev_end = row.get("prev_end_s")
+    prev_end = float(prev_end) if prev_end is not None else None
+    next_start = row.get("next_start_s")
+    next_start = float(next_start) if next_start is not None else None
+
+    lo = (prev_end + _GUARD_S) if prev_end is not None else word_start - head
+    new_start = min(word_start, max(word_start - head, lo))
+    hi = (next_start - _GUARD_S) if next_start is not None else word_end + tail
+    new_end = max(word_end, min(word_end + tail, hi))
+    return new_start, max(new_start, new_end)
+
+
+def _pick_row(rows: list[dict]) -> dict:
+    """Pick a row, honoring the pref-first ordering find_word returns.
+
+    Falls back to uniform random choice when no row is flagged preferred.
+    """
+    if not rows:
+        raise ValueError("no rows to pick from")
+    pref = [r for r in rows if r.get("pref")]
+    return random.choice(pref if pref else rows)
+
+
+def _clip_from_row(row: dict, text: str, kind: str) -> Clip:
+    """Build a padded Clip from a find_word/find_phones row."""
+    start = float(row["start_s"])
+    end = float(row["end_s"])
+    new_start, new_end = _pad_clip(row, start, end, kind)
+    return Clip(
+        local_path=row["local_path"],
+        start_s=new_start,
+        end_s=new_end,
+        source_id=int(row["source_id"]),
+        text=text,
+        kind=kind,
+    )
+
+
 class Matcher:
     """Resolve sentence tokens to clips from the ytpgen index."""
 
@@ -61,27 +129,36 @@ class Matcher:
     _MODE_STRATEGIES: dict[str, list[str]] = {
         "word": ["exact"],
         "phone": ["phones"],
-        "hybrid": ["exact", "phones", "syllables"],
+        # syllables before phones: whole-syllable word clips sound far
+        # better than per-phoneme fragment confetti
+        "hybrid": ["exact", "syllables", "phones"],
     }
 
     def __init__(self, cfg: dict) -> None:
         self._cfg = cfg
+        self._source_ids: set[int] | None = None
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def resolve_sentence(
-        self, text: str, db: Index, mode: str = "hybrid"
+        self,
+        text: str,
+        db: Index,
+        mode: str = "hybrid",
+        source_ids: set[int] | None = None,
     ) -> list[Clip]:
         """Resolve every token of *text* against *db*.
 
+        source_ids restricts matching to those sources (None = all).
         Returns clips in sentence order. Tokens with no resolution at
         all are warned about and skipped.
         """
         strategies = self._MODE_STRATEGIES.get(mode)
         if strategies is None:
             raise ValueError(f"unknown mode: {mode!r}")
+        self._source_ids = source_ids
         clips: list[Clip] = []
         for token in _tokenize(text):
             token_clips = self._resolve_token(token, db, strategies)
@@ -110,23 +187,14 @@ class Matcher:
         """Exact / normalized word lookup."""
         candidates: list[dict] = []
         for probe in dict.fromkeys([token, _normalize(token)]):
-            hits = db.find_word(probe)
+            hits = db.find_word(probe, source_ids=self._source_ids)
             if hits:
                 candidates = hits
                 break
         if not candidates:
             return None
-        row = random.choice(candidates)
-        return [
-            Clip(
-                local_path=row["local_path"],
-                start_s=float(row["start_s"]),
-                end_s=float(row["end_s"]),
-                source_id=int(row["source_id"]),
-                text=token,
-                kind="word",
-            )
-        ]
+        row = _pick_row(candidates)
+        return [_clip_from_row(row, token, kind="word")]
 
     def _resolve_phones(self, token: str, db: Index) -> list[Clip] | None:
         """Cover the token's ARPABET phones with indexed phone spans."""
@@ -144,20 +212,11 @@ class Matcher:
             return None
         clips: list[Clip] = []
         for syl in syls:
-            hits = db.find_word(syl)
+            hits = db.find_word(syl, source_ids=self._source_ids)
             if not hits:
                 return None  # every syllable must resolve or the fallback fails
-            row = random.choice(hits)
-            clips.append(
-                Clip(
-                    local_path=row["local_path"],
-                    start_s=float(row["start_s"]),
-                    end_s=float(row["end_s"]),
-                    source_id=int(row["source_id"]),
-                    text=syl,
-                    kind="word",
-                )
-            )
+            row = _pick_row(hits)
+            clips.append(_clip_from_row(row, syl, kind="word"))
         return clips
 
     # ------------------------------------------------------------------
@@ -235,33 +294,42 @@ class Matcher:
             if seg is None:
                 return None
             row, span = seg
-            clips.append(
-                Clip(
-                    local_path=row["local_path"],
-                    start_s=float(row["start_s"]),
-                    end_s=float(row["end_s"]),
-                    source_id=int(row["source_id"]),
-                    text=" ".join(span),
-                    kind="phone",
-                )
-            )
+            clips.append(_clip_from_row(row, " ".join(span), kind="phone"))
             i += len(span)
         return clips or None
 
     def _find_longest_segment(
         self, phones: list[str], i: int, db: Index
     ) -> tuple[dict, list[str]] | None:
-        """Longest ``phones[i:j]`` run covered by one find_phones hit."""
+        """Longest ``phones[i:j]`` run covered by one find_phones hit.
+
+        Among rows covering the same span, prefers the one whose parent
+        word continues matching the following target phones longest —
+        whole containing words beat single-phone fragments.
+        """
         for j in range(len(phones), i, -1):
             span = phones[i:j]
-            hits = db.find_phones(" ".join(span))
+            hits = db.find_phones(" ".join(span), source_ids=self._source_ids)
             if not hits:
                 continue
+            best: tuple[dict, list[str], int] | None = None
             for row in hits:
                 indexed = [_normalize_ipa(p) for p in row["arpabet"].split()]
                 pos = _contains_at(indexed, span)
-                if pos >= 0:
-                    return row, span
+                if pos < 0:
+                    continue
+                ext = 0
+                if row.get("word_phonemes"):
+                    wp = [_normalize_ipa(p) for p in str(row["word_phonemes"]).split()]
+                    t, k = j, pos + len(span)
+                    while t < len(phones) and k < len(wp) and phones[t] == wp[k]:
+                        ext += 1
+                        t += 1
+                        k += 1
+                if best is None or ext > best[2]:
+                    best = (row, span, ext)
+            if best is not None:
+                return best[0], best[1]
         return None
 
     # ------------------------------------------------------------------

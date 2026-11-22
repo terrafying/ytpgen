@@ -13,19 +13,25 @@
 </table>
 
 <h2>Sources</h2>
+<p class="muted">Check sources to restrict Analyze / Generate to them (no checks = use everything).</p>
 {% if sources %}
+<form method="post" action="{{ url_for('analyze') }}" id="analyze-form">
 <table>
-  <tr><th>video_id</th><th>title</th><th>duration_s</th><th>scenes</th><th>words</th></tr>
+  <tr><th></th><th>video_id</th><th>title</th><th>duration_s</th><th>scenes</th><th>words</th><th></th></tr>
   {% for s in sources %}
   <tr>
+    <td><input type="checkbox" name="source_ids" value="{{ s.id }}" form="analyze-form"></td>
     <td>{{ s.video_id }}</td>
-    <td>{{ s.title or '—' }}</td>
+    <td>{{ s.title or '—' }} {% if s.preferred %}<span class="pref-star">★</span>{% endif %}</td>
     <td>{{ '%.1f'|format(s.duration_s) }}</td>
     <td>{{ s.scenes }}</td>
     <td>{{ s.words }}</td>
+    <td class="muted">{{ s.id }}</td>
   </tr>
   {% endfor %}
 </table>
+<button type="submit" form="analyze-form">Analyze checked (or all if none)</button>
+</form>
 {% else %}
 <p class="empty">No sources yet — ingest something below.</p>
 {% endif %}
@@ -35,15 +41,31 @@
     <h2 style="margin-top:0">Ingest URL(s)</h2>
     <form method="post" action="{{ url_for('ingest') }}">
       <textarea name="urls" placeholder="https://youtu.be/... (one per line)"></textarea>
-      <button type="submit">Ingest</button>
+      <button type="submit">Ingest (background)</button>
     </form>
   </div>
   <div class="panel">
-    <h2 style="margin-top:0">Analyze</h2>
-    <p class="muted">Scene-detect + transcribe every source that is missing analysis.</p>
-    <form method="post" action="{{ url_for('analyze') }}">
-      <button type="submit">Analyze all</button>
-    </form>
+    <h2 style="margin-top:0">Recent jobs</h2>
+    {% if jobs %}
+    <table>
+      {% for j in jobs %}
+      <tr><td><a href="{{ url_for('job_status', job_id=j.id) }}">{{ j.kind }}</a></td>
+          <td><span class="badge badge-{{ j.status }}">{{ j.status }}</span></td></tr>
+      {% endfor %}
+    </table>
+    {% else %}<p class="muted">No jobs yet.</p>{% endif %}
   </div>
 </div>
+
+{% if prefs %}
+<h2>Word preferences</h2>
+<p class="muted">Words pinned to a source; matching prefers their clips.</p>
+<table>
+  <tr><th>word</th><th>pref source</th></tr>
+  {% for w, p in prefs.items() %}
+  <tr><td><a href="{{ url_for('word_detail', word=w) }}">{{ w }}</a></td>
+      <td>{{ p.source_id }}</td></tr>
+  {% endfor %}
+</table>
+{% endif %}
 {% endblock %}

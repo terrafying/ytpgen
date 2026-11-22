@@ -55,6 +55,14 @@ CREATE TABLE IF NOT EXISTS words_phones (
 );
 CREATE INDEX IF NOT EXISTS idx_phones_arpabet ON words_phones(arpabet);
 CREATE INDEX IF NOT EXISTS idx_phones_source ON words_phones(source_id);
+CREATE INDEX IF NOT EXISTS idx_words_source_start ON words(source_id, start_s);
+CREATE TABLE IF NOT EXISTS word_prefs (
+    word_lower TEXT PRIMARY KEY,
+    pref_source_id INTEGER NOT NULL REFERENCES sources(id),
+    pref_word_id INTEGER REFERENCES words(id),
+    note TEXT DEFAULT '',
+    updated_at TEXT DEFAULT (datetime('now'))
+);
 """
 
 
@@ -126,6 +134,15 @@ class Index:
         )
         self._conn.commit()
 
+    def analyze_source_ids(self) -> set[int]:
+        """Ids of sources that have both scenes and words indexed."""
+        return {
+            r[0]
+            for r in self._conn.execute(
+                "SELECT source_id FROM scenes INTERSECT SELECT source_id FROM words"
+            )
+        }
+
     # ------------------------------------------------------------------
     # Words / phones
     # ------------------------------------------------------------------
@@ -163,29 +180,101 @@ class Index:
     def commit(self) -> None:
         self._conn.commit()
 
-    def find_word(self, word: str, limit: int = 20) -> list[dict]:
-        """All indexed occurrences of *word* (case-insensitive)."""
-        rows = self._conn.execute(
-            "SELECT w.id, w.source_id, s.local_path, w.word, w.start_s, w.end_s, w.phonemes"
-            " FROM words w JOIN sources s ON w.source_id = s.id"
-            " WHERE w.word_lower = ?",
-            (word.lower().strip(".,!?;:\"'"),),
-        ).fetchall()
-        out = [dict(r) for r in rows]
-        random.shuffle(out)
-        return out[:limit]
+    def find_word(
+        self, word: str, limit: int = 20, source_ids: set[int] | None = None
+    ) -> list[dict]:
+        """All indexed occurrences of *word* (case-insensitive).
 
-    def find_phones(self, arpabet_seq: str, limit: int = 20) -> list[dict]:
-        """Rows whose ARPABET sequence contains the given space-separated phones."""
-        rows = self._conn.execute(
+        source_ids filters to those sources (None = all). Rows from
+        sources with a word_pref rank first.
+        """
+        sql = (
+            "SELECT w.id, w.source_id, s.local_path, w.word, w.start_s, w.end_s, w.phonemes,"
+            " EXISTS(SELECT 1 FROM word_prefs p WHERE p.word_lower = w.word_lower"
+            "        AND p.pref_source_id = w.source_id) AS pref,"
+            " (SELECT MAX(w2.end_s) FROM words w2"
+            "   WHERE w2.source_id = w.source_id AND w2.end_s <= w.start_s) AS prev_end_s,"
+            " (SELECT MIN(w2.start_s) FROM words w2"
+            "   WHERE w2.source_id = w.source_id AND w2.start_s >= w.end_s) AS next_start_s"
+            " FROM words w JOIN sources s ON w.source_id = s.id"
+            " WHERE w.word_lower = ?"
+        )
+        params: list = [word.lower().strip(".,!?;:\"'")]
+        if source_ids:
+            marks = ",".join("?" * len(source_ids))
+            sql += f" AND w.source_id IN ({marks})"
+            params.extend(int(i) for i in source_ids)
+        rows = self._conn.execute(sql, params).fetchall()
+        pref_rows = []
+        rest = []
+        for r in rows:
+            (pref_rows if r["pref"] else rest).append(dict(r))
+        random.shuffle(pref_rows)
+        random.shuffle(rest)
+        return (pref_rows + rest)[:limit]
+
+    def set_word_pref(
+        self, word: str, source_id: int, word_id: int | None = None, note: str = ""
+    ) -> None:
+        """Pin *word* to prefer clips from *source_id*."""
+        self._conn.execute(
+            "INSERT INTO word_prefs (word_lower, pref_source_id, pref_word_id, note, updated_at)"
+            " VALUES (?, ?, ?, ?, datetime('now'))"
+            " ON CONFLICT(word_lower) DO UPDATE SET"
+            " pref_source_id=excluded.pref_source_id,"
+            " pref_word_id=excluded.pref_word_id, note=excluded.note,"
+            " updated_at=datetime('now')",
+            (word.lower().strip(".,!?;:\"'"), int(source_id), word_id, note),
+        )
+        self._conn.commit()
+
+    def clear_word_pref(self, word: str) -> None:
+        self._conn.execute(
+            "DELETE FROM word_prefs WHERE word_lower = ?",
+            (word.lower().strip(".,!?;:\"'"),),
+        )
+        self._conn.commit()
+
+    def word_prefs(self) -> dict[str, dict]:
+        """All prefs: word_lower -> {source_id, word_id}."""
+        return {
+            r["word_lower"]: {
+                "source_id": r["pref_source_id"],
+                "word_id": r["pref_word_id"],
+            }
+            for r in self._conn.execute(
+                "SELECT word_lower, pref_source_id, pref_word_id FROM word_prefs"
+            ).fetchall()
+        }
+
+    def find_phones(
+        self, arpabet_seq: str, limit: int = 20, source_ids: set[int] | None = None
+    ) -> list[dict]:
+        """Rows whose ARPABET sequence contains the given space-separated phones.
+
+        Each row carries its parent word's full span (word_start_s/word_end_s)
+        and full phone string (word_phonemes) so callers can extend or pad
+        within word boundaries. source_ids filters to those sources.
+        """
+        sql = (
             "SELECT wp.source_id, s.local_path, wp.ipa, wp.arpabet,"
-            " wp.start_s, wp.end_s, w.word"
+            " wp.start_s, wp.end_s, w.word, w.start_s AS word_start_s,"
+            " w.end_s AS word_end_s, w.phonemes AS word_phonemes,"
+            " (SELECT MAX(w2.end_s) FROM words w2"
+            "   WHERE w2.source_id = wp.source_id AND w2.end_s <= w.start_s) AS prev_end_s,"
+            " (SELECT MIN(w2.start_s) FROM words w2"
+            "   WHERE w2.source_id = wp.source_id AND w2.start_s >= w.end_s) AS next_start_s"
             " FROM words_phones wp"
             " JOIN words w ON wp.word_rowid = w.id"
             " JOIN sources s ON wp.source_id = s.id"
-            " WHERE wp.arpabet LIKE ?",
-            (f"%{arpabet_seq}%",),
-        ).fetchall()
+            " WHERE wp.arpabet LIKE ?"
+        )
+        params: list = [f"%{arpabet_seq}%"]
+        if source_ids:
+            marks = ",".join("?" * len(source_ids))
+            sql += f" AND wp.source_id IN ({marks})"
+            params.extend(int(i) for i in source_ids)
+        rows = self._conn.execute(sql, params).fetchall()
         out = [dict(r) for r in rows]
         random.shuffle(out)
         return out[:limit]

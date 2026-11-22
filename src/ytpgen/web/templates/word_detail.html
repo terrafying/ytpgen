@@ -1,13 +1,37 @@
 {% extends "base.html" %}
-{% block title %}“{{ word }}” — ytpgen{% endblock %}
+{% block title %}"{{ word }}" — ytpgen{% endblock %}
 {% block content %}
-<h1>“{{ word }}” — {{ hits|length }} occurrence(s)</h1>
+<h1>"{{ word }}" — {{ hits|length }} occurrence(s)
+  {% if pref %}<span class="pref-star" title="prefers source {{ pref.source_id }}">★</span>{% endif %}
+</h1>
+
+<div class="panel">
+  <h2 style="margin-top:0">Preference</h2>
+  {% if pref %}
+  <p class="muted">Currently prefers clips from source {{ pref.source_id }}.</p>
+  {% else %}
+  <p class="muted">No preference — matching picks from all sources.</p>
+  {% endif %}
+  <form method="post" action="{{ url_for('word_pref', word=word) }}" class="grid2">
+    <select name="source_id">
+      {% for s in sources %}
+      <option value="{{ s.id }}" {% if pref and pref.source_id == s.id %}selected{% endif %}>
+        {{ s.title or s.video_id }} ({{ s.video_id }})</option>
+      {% endfor %}
+    </select>
+    <span>
+      <button type="submit" name="action" value="set">Prefer this source</button>
+      <button type="submit" name="action" value="clear" class="secondary">Clear</button>
+    </span>
+  </form>
+</div>
+
 {% if hits %}
 <table>
   <tr><th>source</th><th>start</th><th>end</th><th>phonemes</th><th>preview</th></tr>
   {% for h in hits %}
   <tr>
-    <td>{{ h.source_title or h.video_id or '?' }}</td>
+    <td>{{ h.source_title or '?' }}</td>
     <td>{{ '%.2f'|format(h.start_s) }}</td>
     <td>{{ '%.2f'|format(h.end_s) }}</td>
     <td class="muted">{{ h.phonemes or '' }}</td>
@@ -20,7 +44,7 @@
   {% endfor %}
 </table>
 {% else %}
-<p class="empty">No occurrences of “{{ word }}”.</p>
+<p class="empty">No occurrences of "{{ word }}".</p>
 {% endif %}
 <p><a href="{{ url_for('words') }}">&larr; all words</a></p>
 {% endblock %}

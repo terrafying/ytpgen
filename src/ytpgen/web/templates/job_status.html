@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}{{ job.label }} — ytpgen{% endblock %}
+{% block content %}
+<h1>Job <code>{{ job.id }}</code> <span class="badge badge-{{ job.status }}">{{ job.status }}</span></h1>
+<div class="panel">
+  <p><b>{{ job.kind }}</b> — {{ job.label }}</p>
+  {% if job.error %}<p class="flash error">{{ job.error }}</p>{% endif %}
+  {% if job.status == 'done' and job.result %}
+    <p>Result: {{ job.result }}</p>
+    {% if job.result.edl %}
+      <p><a href="{{ url_for('edl_detail', name=job.result.edl) }}">Open EDL {{ job.result.edl }}</a>
+      {% if job.result.mp4 %} · <a href="/media/outputs/{{ job.result.mp4 }}">Watch mp4</a>{% endif %}</p>
+    {% endif %}
+  {% endif %}
+  <h2>Log</h2>
+  <div class="joblog" id="joblog">{% for line in job.log %}{{ line }}
+{% endfor %}</div>
+</div>
+<p><a href="{{ url_for('jobs') }}">&larr; all jobs</a></p>
+<script>
+  // poll while running; reload the page on completion so result links appear
+  (function poll(){
+    fetch(location.pathname + '/status').then(r => r.json()).then(d => {
+      if (d.status === 'done' || d.status === 'error') { location.reload(); return; }
+      setTimeout(poll, 1500);
+    });
+  })();
+</script>
+{% endblock %}

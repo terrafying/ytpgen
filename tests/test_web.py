@@ -74,6 +74,21 @@ def test_dashboard_200_stats_and_sources(env):
 # ---------------------------------------------------------------------------
 
 
+def _wait_job(env: SimpleNamespace, job_id: str, timeout: float = 10.0) -> dict:
+    """Poll the app's JobRunner until the job settles; return its status dict."""
+    import time
+
+    runner = env.app.config["JOBS"]
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        st = runner.status(job_id)
+        assert st is not None, f"unknown job {job_id}"
+        if st["status"] in ("done", "error"):
+            return st
+        time.sleep(0.05)
+    raise AssertionError(f"job {job_id} did not settle within {timeout}s")
+
+
 def test_ingest_post_mocked_redirects_with_flash(env, monkeypatch):
     calls = []
 
@@ -89,11 +104,13 @@ def test_ingest_post_mocked_redirects_with_flash(env, monkeypatch):
     r = env.client.post(
         "/ingest",
         data={"urls": "https://youtu.be/aaaaaaaaaaa\nhttps://youtu.be/bbbbbbbbbbb"},
-        follow_redirects=True,
     )
-    assert r.status_code == 200
-    assert b"added 4" in r.data  # summed across the two URL lines
-    assert b"skipped 2" in r.data
+    assert r.status_code == 302
+    loc = r.headers["Location"]
+    assert "/jobs/" in loc
+    st = _wait_job(env, loc.rsplit("/", 1)[-1])
+    assert st["status"] == "done"
+    assert st["result"] == {"added": 4, "skipped": 2, "failed": 0}
     # one Ingestor call per URL line
     assert [c[0] for c in calls] == [
         "https://youtu.be/aaaaaaaaaaa",
@@ -110,11 +127,10 @@ def test_ingest_error_flashes_message(env, monkeypatch):
             raise RuntimeError("boom")
 
     monkeypatch.setattr("ytpgen.acquire.ingest.Ingestor", BoomIngestor)
-    r = env.client.post("/ingest", data={"urls": "https://youtu.be/aaaaaaaaaaa"},
-                        follow_redirects=True)
-    assert r.status_code == 200
-    assert b"Ingest failed" in r.data
-    assert b"boom" in r.data
+    r = env.client.post("/ingest", data={"urls": "https://youtu.be/aaaaaaaaaaa"})
+    st = _wait_job(env, r.headers["Location"].rsplit("/", 1)[-1])
+    assert st["status"] == "error"
+    assert "boom" in st["error"]
 
 
 def test_ingest_empty_urls_flashes(env):
@@ -140,17 +156,42 @@ def test_analyze_runs_for_unanalyzed_sources(env, monkeypatch):
             return {"scenes": 3, "words": 7}
 
     monkeypatch.setattr("ytpgen.analyze.segment.Segmenter", FakeSegmenter)
-    r = env.client.post("/analyze", follow_redirects=True)
-    assert r.status_code == 200
-    assert b"Analyzed 1 source" in r.data
+    r = env.client.post("/analyze")
+    assert r.status_code == 302
+    st = _wait_job(env, r.headers["Location"].rsplit("/", 1)[-1])
+    assert st["status"] == "done"
+    assert st["result"] == {"analyzed": 1, "errors": 0}
     assert calls == ["v1"]
+
+
+def test_analyze_source_selection_filters(env, monkeypatch):
+    calls = []
+    env.db.add_source("v2", "https://youtu.be/v2", "Two",
+                      str(env.ws / "media" / "v2.mp4"), 60.0)
+    env.db.commit()
+
+    class FakeSegmenter:
+        def __init__(self, cfg, conn):
+            pass
+
+        def analyze(self, video, db):
+            calls.append(video.video_id)
+            return {"scenes": 3, "words": 7}
+
+    monkeypatch.setattr("ytpgen.analyze.segment.Segmenter", FakeSegmenter)
+    other = env.db.conn.execute(
+        "SELECT id FROM sources WHERE video_id = 'v2'").fetchone()["id"]
+    r = env.client.post("/analyze", data={"source_ids": str(other)})
+    st = _wait_job(env, r.headers["Location"].rsplit("/", 1)[-1])
+    assert st["status"] == "done"
+    assert calls == ["v2"]  # only the checked source analyzed
 
 
 def test_analyze_missing_module_friendly_error(env, monkeypatch):
     monkeypatch.setitem(sys.modules, "ytpgen.analyze.segment", None)
-    r = env.client.post("/analyze", follow_redirects=True)
-    assert r.status_code == 200
-    assert b"not ready" in r.data.lower()
+    r = env.client.post("/analyze")
+    st = _wait_job(env, r.headers["Location"].rsplit("/", 1)[-1])
+    assert st["status"] == "error"
 
 
 # ---------------------------------------------------------------------------
@@ -259,9 +300,10 @@ def test_edl_render_mocked(env, monkeypatch):
             return Path(output_path)
 
     monkeypatch.setattr("ytpgen.compose.renderer.Renderer", FakeRenderer)
-    r = env.client.post("/edl/demo.edl.json/render", follow_redirects=True)
-    assert r.status_code == 200
-    assert b"demo.mp4" in r.data
+    r = env.client.post("/edl/demo.edl.json/render")
+    assert r.status_code == 302
+    st = _wait_job(env, r.headers["Location"].rsplit("/", 1)[-1])
+    assert st["status"] == "done"
     assert (env.ws / "outputs" / "demo.mp4").exists()
 
 
@@ -290,7 +332,9 @@ def test_generate_creates_and_renders(env, monkeypatch):
     monkeypatch.setattr("ytpgen.compose.renderer.Renderer", FakeRenderer)
     r = env.client.post("/generate", data={"text": "poop", "mode": "word"})
     assert r.status_code == 302
-    assert "/edl/gen_poop" in r.headers["Location"]
+    st = _wait_job(env, r.headers["Location"].rsplit("/", 1)[-1])
+    assert st["status"] == "done"
+    assert st["result"]["edl"] == "gen_poop.edl.json"
     edl_path = env.ws / "outputs" / "gen_poop.edl.json"
     assert edl_path.exists()
     saved = load_edl(edl_path)
@@ -300,11 +344,11 @@ def test_generate_creates_and_renders(env, monkeypatch):
     assert r.status_code == 200
 
 
-def test_generate_no_clips_flashes_error(env):
-    r = env.client.post("/generate", data={"text": "qqqzzz", "mode": "word"},
-                        follow_redirects=True)
-    assert r.status_code == 200
-    assert b"No clips matched" in r.data
+def test_generate_no_clips_job_errors(env):
+    r = env.client.post("/generate", data={"text": "qqqzzz", "mode": "word"})
+    st = _wait_job(env, r.headers["Location"].rsplit("/", 1)[-1])
+    assert st["status"] == "error"
+    assert "no clips matched" in st["error"].lower()
 
 
 def test_auto_plans_and_renders(env, monkeypatch):
@@ -331,7 +375,8 @@ def test_auto_plans_and_renders(env, monkeypatch):
     monkeypatch.setattr("ytpgen.compose.renderer.Renderer", FakeRenderer)
     r = env.client.post("/auto", data={"video_id": "v1", "target": "30"})
     assert r.status_code == 302
-    assert "/edl/auto_v1" in r.headers["Location"]
+    st = _wait_job(env, r.headers["Location"].rsplit("/", 1)[-1])
+    assert st["status"] == "done"
     assert calls == [("v1", 30)]
     assert (env.ws / "outputs" / "auto_v1.edl.json").exists()
     assert (env.ws / "outputs" / "auto_v1.mp4").exists()
@@ -355,3 +400,55 @@ def test_media_blocks_traversal(env):
     r2 = env.client.get("/media/%2e%2e/index.db")
     assert r1.status_code == 404
     assert r2.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Word preferences + reroll
+# ---------------------------------------------------------------------------
+
+
+def test_word_pref_set_and_clear(env, monkeypatch):
+    env.db.add_word(env.sid, "poop", 1.0, 2.0)
+    env.db.commit()
+    # dashboard lists prefs after set
+    r = env.client.post("/words/poop/pref", data={"source_id": str(env.sid),
+                                                  "action": "set"},
+                        follow_redirects=True)
+    assert r.status_code == 200
+    assert env.db.word_prefs().get("poop", {}).get("source_id") == env.sid
+
+    # find_word ranks pref source first when multiple sources have the word
+    other = env.db.add_source("v2", "u", "Two", "/tmp/v2.mp4", 10.0)
+    env.db.add_word(other, "poop", 5.0, 6.0)
+    env.db.commit()
+    hits = env.db.find_word("poop")
+    assert hits[0]["source_id"] == env.sid
+
+    r = env.client.post("/words/poop/pref", data={"action": "clear"},
+                        follow_redirects=True)
+    assert r.status_code == 200
+    assert "poop" not in env.db.word_prefs()
+
+
+def test_generate_uses_pref_source(env, monkeypatch):
+    env.db.add_word(env.sid, "poop", 1.0, 2.0)
+    other = env.db.add_source("v2", "u", "Two", "/tmp/v2.mp4", 10.0)
+    env.db.add_word(other, "poop", 5.0, 6.0)
+    env.db.set_word_pref("poop", other)
+    env.db.commit()
+    from ytpgen.compose.matcher import Matcher
+
+    clips = Matcher(env.cfg).resolve_sentence("poop", env.db, mode="word")
+    assert clips[0].source_id == other
+
+
+def test_generate_source_selection(env, monkeypatch):
+    env.db.add_word(env.sid, "poop", 1.0, 2.0)
+    other = env.db.add_source("v2", "u", "Two", "/tmp/v2.mp4", 10.0)
+    env.db.add_word(other, "poop", 5.0, 6.0)
+    env.db.commit()
+    from ytpgen.compose.matcher import Matcher
+
+    clips = Matcher(env.cfg).resolve_sentence("poop", env.db, mode="word",
+                                              source_ids={other})
+    assert len(clips) == 1 and clips[0].source_id == other

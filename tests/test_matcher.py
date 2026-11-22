@@ -55,8 +55,10 @@ class TestExact:
         assert len(clips) == 1
         clip = clips[0]
         assert clip.local_path == "/media/one.mp4"
-        assert clip.start_s == pytest.approx(1.0)
-        assert clip.end_s == pytest.approx(1.4)
+        # hello [1.0,1.4]; no prev word → head pad extends into silence
+        # (1.0-0.035); next word at 2.0 → tail pad to word_end+0.06
+        assert clip.start_s == pytest.approx(0.965)
+        assert clip.end_s == pytest.approx(1.46)
         assert clip.kind == "word"
         assert clip.text == "hello"
         assert clip.source_id == db.get_source(1)["id"] or clip.source_id >= 1
@@ -111,7 +113,11 @@ class TestModes:
         clips = m.resolve_sentence("hello", db, mode="phone")
         assert clips
         assert all(c.kind == "phone" for c in clips)
-        assert sum(c.end_s - c.start_s for c in clips) == pytest.approx(0.4)
+        # clips are padded (head 0.015 / tail 0.025) but clamped to the
+        # parent word span [1.0, 1.4]
+        assert all(c.start_s >= 1.0 - 0.015 and c.end_s <= 1.4 + 0.025
+                   for c in clips)
+        assert all(c.start_s >= 0.98 and c.end_s <= 1.425 for c in clips)
 
     def test_unknown_mode_raises(self, db, matcher_no_ipa):
         with pytest.raises(ValueError):
@@ -167,8 +173,10 @@ class TestPhones:
         assert [c.text for c in clips] == ["HH", "AH", "L", "OW"]
         assert all(c.kind == "phone" for c in clips)
         assert all(c.local_path == "/media/two.mp4" for c in clips)
-        assert clips[0].start_s == pytest.approx(5.0)
-        assert clips[-1].end_s == pytest.approx(5.4)
+        # phone [5.0,5.1] with head pad 0.015 → 4.985; last phone ends 5.4
+        # with tail pad 0.025 → 5.425 (no neighbors to clamp)
+        assert clips[0].start_s == pytest.approx(5.0 - 0.015)
+        assert clips[-1].end_s == pytest.approx(5.4 + 0.025)
 
     def test_phone_unavailable_falls_through_to_syllables(
         self, db, monkeypatch
@@ -195,7 +203,12 @@ class TestSyllables:
         paths = [c.local_path for c in clips]
         assert paths == ["/media/one.mp4", "/media/one.mp4"]
         times = [(c.start_s, c.end_s) for c in clips]
-        assert times == [(3.0, 3.3), (4.0, 4.4)]
+        # 'base' [3.0,3.3]: prev 'world' ends 2.5 (silence gap) → head pad
+        # to 2.965; tail +0.06 → 3.36. 'line' [4.0,4.4] symmetric.
+        assert times == [
+            (pytest.approx(2.965), pytest.approx(3.36)),
+            (pytest.approx(3.965), pytest.approx(4.46)),
+        ]
 
     def test_short_word_never_splits(self, db, matcher_no_ipa):
         # 'an' has no vowel-cuts; resolves nowhere and is skipped.

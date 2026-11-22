@@ -2,14 +2,29 @@
 {% block title %}{{ name }} — ytpgen{% endblock %}
 {% block content %}
 <h1>{{ name }}</h1>
-<form method="post" action="{{ url_for('edl_save', name=name) }}">
-  <textarea name="content" rows="24" spellcheck="false">{{ content }}</textarea>
-  <button type="submit">Save</button>
-</form>
-<form method="post" action="{{ url_for('edl_render', name=name) }}"
-      onsubmit="this.querySelector('button').disabled=true">
-  <button type="submit">Render to {{ rendered }}</button>
-</form>
+<div class="grid2">
+  <form method="post" action="{{ url_for('edl_save', name=name) }}">
+    <textarea name="content" rows="24" spellcheck="false">{{ content }}</textarea>
+    <button type="submit">Save</button>
+  </form>
+  <div>
+    {% if rendered_exists %}
+    <h2 style="margin-top:0">Preview</h2>
+    <video controls preload="metadata" src="/media/outputs/{{ rendered }}"></video>
+    {% endif %}
+    <h2>Render</h2>
+    <form method="post" action="{{ url_for('edl_render', name=name) }}">
+      <button type="submit">Render to {{ rendered }} (background)</button>
+    </form>
+    {% if name.startswith('gen_') %}
+    <h2>Reroll</h2>
+    <form method="post" action="{{ url_for('edl_reroll', name=name) }}">
+      <button type="submit" class="secondary">Re-pick sources + re-render</button>
+    </form>
+    <p class="muted">Re-resolves the same sentence for fresh takes from the library.</p>
+    {% endif %}
+  </div>
+</div>
 <p class="muted">{{ name }}</p>
 <p><a href="{{ url_for('edl_list') }}">&larr; all EDLs</a></p>
 {% endblock %}

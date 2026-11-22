@@ -14,9 +14,16 @@
       </select>
     </label>
   </p>
-  <button type="submit">Generate + render</button>
+  <p>
+    <span class="muted">sources (none = all):</span><br>
+    {% for s in sources %}
+    <label class="checkline"><input type="checkbox" name="source_ids" value="{{ s.id }}">
+      {{ s.title or s.video_id }} <span class="muted">({{ s.video_id }})</span></label>
+    {% endfor %}
+  </p>
+  <button type="submit">Generate + render (background)</button>
 </form>
 </div>
-<p class="muted">Resolves each word from the index, saves an EDL, and renders an mp4
-(synchronous — may take a while).</p>
+<p class="muted">Resolves each word from the index, saves an EDL, and renders an mp4 as a
+background job — you'll be taken to the job page and can watch it.</p>
 {% endblock %}

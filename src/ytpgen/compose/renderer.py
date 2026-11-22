@@ -101,11 +101,11 @@ class Renderer:
             vparts.append("[0:v]null")
             apart.append("[0:a]anull")
 
-        # speed first so fps/pad geometry downstream stays canonical
+        # audio speed before video setpts; both before geometry so pad/fps
+        # operate on the final timeline
         if abs(ev.speed - 1.0) > 1e-9:
-            chain = _atempo_chain(ev.speed)
+            apart.append(_atempo_chain(ev.speed))
             vparts.append(f"setpts=PTS/{ev.speed:g}")
-            apart.append(chain)
 
         if abs(ev.gain_db) > 1e-9:
             apart.append(f"volume={ev.gain_db:g}dB")
@@ -113,10 +113,14 @@ class Renderer:
         vparts.append(
             f"scale={self.width}:{self.height}:force_original_aspect_ratio=decrease,"
             f"pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2,"
+            f"setsar=1,"
             f"fps={self.fps:g}"
         )
+        # uniform audio layout across events: concat demuxer needs identical
+        # stream parameters or -c copy drifts/clicks between segments
+        apart.append("aresample=44100")
+        apart.append("aformat=sample_fmts=fltp:channel_layouts=stereo")
 
-        # ',' chains filters within one chain; ';' separates video/audio chains
         fc = ",".join(vparts) + "[vout];" + ",".join(apart) + "[aout]"
         return fc, "[vout]"
 
@@ -227,13 +231,14 @@ class Renderer:
                 logger.warning("%d/%d events skipped", failed, len(edl.events))
 
             list_file = tmpdir / "concat.txt"
-            try:
-                self._concat_copy(segments, list_file, output_path)
-                logger.info("concat copy OK: %s (%d segments)", output_path, len(segments))
-            except Exception as exc:  # noqa: BLE001 — mixed codecs etc.
-                logger.warning("concat -c copy failed (%s); re-encoding", exc)
-                self._concat_reencode(segments, output_path)
-                logger.info("concat re-encode OK: %s", output_path)
+            # Always re-encode the final concat: -c copy on independently
+            # encoded AAC segments accumulates priming-sample drift and
+            # produces clicks at every boundary. list_file kept for the
+            # fallback concat-demuxer path in _concat_reencode.
+            self._concat_reencode(segments, output_path)
+            logger.info(
+                "concat re-encode OK: %s (%d segments)", output_path, len(segments)
+            )
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 

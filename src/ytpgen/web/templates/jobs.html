@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}jobs — ytpgen{% endblock %}
+{% block content %}
+<h1>Jobs</h1>
+{% if jobs %}
+<table>
+  <tr><th>id</th><th>kind</th><th>label</th><th>status</th><th>age</th></tr>
+  {% for j in jobs %}
+  <tr>
+    <td><a href="{{ url_for('job_status', job_id=j.id) }}">{{ j.id }}</a></td>
+    <td>{{ j.kind }}</td>
+    <td>{{ j.label }}</td>
+    <td><span class="badge badge-{{ j.status }}">{{ j.status }}</span></td>
+    <td class="muted">{{ j.result.edl if j.result and j.result.edl is defined else '' }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p class="empty">No jobs yet.</p>
+{% endif %}
+{% endblock %}
