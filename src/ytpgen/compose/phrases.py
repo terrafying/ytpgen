@@ -9,6 +9,7 @@ time, so pauses stand in for sentence boundaries.
 from __future__ import annotations
 
 import bisect
+import json
 import sqlite3
 from dataclasses import dataclass, field
 
@@ -62,8 +63,13 @@ def derive_phrases(
         " ORDER BY w.source_id, w.start_s"
     ).fetchall()
     cuts: dict[int, list[float]] = {}
-    for sid, start in conn.execute("SELECT source_id, start_s FROM scenes ORDER BY source_id, start_s"):
+    visual: dict[int, list[dict | None]] = {}  # per source, aligned with cuts
+    has_tags = conn.execute("SELECT name FROM sqlite_master WHERE name = 'scene_tags'").fetchone()
+    sql = ("SELECT sc.source_id, sc.start_s, t.tags FROM scenes sc LEFT JOIN scene_tags t ON t.scene_id = sc.id"
+           if has_tags else "SELECT source_id, start_s, NULL FROM scenes")
+    for sid, start, tags in conn.execute(sql + " ORDER BY 1, 2"):
         cuts.setdefault(sid, []).append(float(start))
+        visual.setdefault(sid, []).append(json.loads(tags) if tags else None)
 
     phrases: list[Phrase] = []
     cur: Phrase | None = None
@@ -86,6 +92,8 @@ def derive_phrases(
             if cur is not None and cur.source_id == sid:
                 cur.next_start_s = start
             cur = Phrase(len(phrases), sid, path, [], [], [], prev_end_s=prev_end, scene_idx=scene)
+            if scene >= 0 and visual.get(sid, [None])[scene]:
+                cur.extra["visual"] = visual[sid][scene]
             phrases.append(cur)
         cur.words.append(word)
         cur.starts.append(float(start))

@@ -99,3 +99,30 @@ def test_judge_unexpected_congruence(db):
     assert r["score"] == pytest.approx(round(25 / 30 * 0.5, 3))
     assert "[i love you] very much" not in seen["prompt"]  # scene cut: different context
     assert "bomb is coming" in seen["prompt"] and "no original scene" in seen["prompt"]
+
+
+def test_scene_tags_flow_into_phrases_listing_and_judge(db):
+    from ytpgen.analyze.tag import parse_tags, tag_scenes
+    from ytpgen.compose.judge import judge
+    from ytpgen.compose.planner import _listing
+
+    replies = iter(['{"people": ["boy at desk"], "speaking": true, "setting": "classroom", "shot": "medium"}',
+                    "not json", '{"people": ["woman in hat", "man"], "setting": "office", "shot": "close-up"}'])
+    n = tag_scenes({}, db.conn, llm=lambda cfg, img: next(replies), grab=lambda path, at: b"jpg")
+    assert n == 3
+    assert parse_tags("garbage") == {"people": [], "speaking": False, "setting": "", "shot": ""}
+    phrases = derive_phrases(db.conn)
+    assert phrases[0].extra["visual"]["people"] == ["boy at desk"]
+    listing = _listing(phrases)
+    assert "## film 1, scene 0: classroom, medium: boy at desk, someone talking" in listing
+    assert listing.count("## film 1, scene 0") == 1  # one header for both phrases of that scene
+
+    by_id = {p.id: p for p in phrases}
+    seen = {}
+
+    def llm(cfg, msgs, temperature, seed):
+        seen["p"] = msgs[0]["content"]
+        return json.dumps({"shift": [10, 10], "fit": [10], "look": [0]})
+
+    r = judge({}, [{"p": 0}, {"p": 3}], by_id, llm=llm)
+    assert "on_screen" in seen["p"] and r["congruent"] == pytest.approx(0.5)

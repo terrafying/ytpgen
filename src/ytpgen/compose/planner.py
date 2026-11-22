@@ -51,6 +51,9 @@ Rules:
 - Do NOT retell the original films. Pull lines out of their context and set them against lines
   from elsewhere (other scenes, other films) so they mean something new. Never use two lines
   that follow each other in the original.
+- When scenes are described (## headers say who is on screen), make the cuts make visual sense
+  too: keep the same character on screen through a back-and-forth, cut to a matching or reaction
+  shot, and only put a line over a mismatched face when that mismatch is the joke.
 - Aim for {n_lines} lines, about {seconds} seconds spoken. Order matters: setup, turn, payoff.
 - Tone: {tone}.
 {theme}
@@ -129,11 +132,25 @@ def resolve(lines: list[dict], phrases: dict[int, Phrase], db: Index, matcher: M
     return clips, " ".join(said), missing
 
 
+def _listing(pool: list[Phrase]) -> str:
+    """Lines grouped under a scene header saying who is on screen (when scenes are tagged)."""
+    from ytpgen.analyze.tag import describe
+
+    out, last = [], None
+    for p in pool:
+        key = (p.source_id, p.scene_idx)
+        if key != last and p.extra.get("visual"):
+            out.append(f"## film {p.source_id}, scene {p.scene_idx}: {describe(p.extra['visual'])}")
+        last = key
+        out.append(f"{p.id}: {p.text}")
+    return "\n".join(out)
+
+
 def build_prompt(phrases: list[Phrase], tone: str, theme: str | None, seconds: int, seed: int) -> list[dict]:
     pool = phrases
     if len(pool) > MAX_PHRASES:
         pool = sorted(random.Random(seed).sample(pool, MAX_PHRASES), key=lambda p: p.id)
-    listing = "\n".join(f"{p.id}: {p.text}" for p in pool)
+    listing = _listing(pool)
     system = SYSTEM.format(
         n_lines=max(4, seconds // 3), seconds=seconds, tone=TONES.get(tone, tone),
         theme=f"- Theme to explore: {theme}." if theme else "- No theme given: find the most striking message the footage wants to say.",

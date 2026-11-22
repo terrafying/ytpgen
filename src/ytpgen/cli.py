@@ -152,6 +152,16 @@ def cmd_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tag(args: argparse.Namespace) -> int:
+    """Describe who is on screen in every untagged scene (needs a vision LLM server)."""
+    from ytpgen.analyze.tag import tag_scenes
+
+    cfg = _open_config(args)
+    n = tag_scenes(cfg, _db(cfg).conn)
+    print(f"tagged {n} scene(s)")
+    return 0
+
+
 def cmd_render(args: argparse.Namespace) -> int:
     from ytpgen.compose.edl import load_edl
     from ytpgen.compose.renderer import Renderer
@@ -224,6 +234,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--seed", type=int, default=0)
     sp.add_argument("-o", "--output", default="outputs/plan.mp4")
     sp.set_defaults(func=cmd_plan)
+
+    sp = sub.add_parser("tag", help="Tag scenes with who/what is on screen (vision LLM)")
+    sp.set_defaults(func=cmd_tag)
 
     sp = sub.add_parser("render", help="Render an existing EDL")
     sp.add_argument("edl")

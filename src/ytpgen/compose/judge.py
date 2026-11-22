@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import re
 
+from ytpgen.analyze.tag import describe
 from ytpgen.compose.phrases import Phrase
 from ytpgen.compose.planner import chat
 
@@ -23,8 +24,11 @@ Score, as integers 0-10:
   scene (0 = means exactly the same, 10 = completely recontextualised).
 - "fit" per transition: how naturally line i+1 follows line i in the new piece, as if written to
   follow it (0 = non sequitur, 10 = seamless).
+- "look" per transition, only if lines say who is on screen: does the cut make visual sense
+  (same character continuing, a fitting reaction or matching shot = high; a random jarring face
+  change = low, unless the mismatch is clearly the joke).
 
-Reply with JSON only: {"shift": [..one per line..], "fit": [..one per transition..], "why": "<one sentence>"}
+Reply with JSON only: {"shift": [..one per line..], "fit": [..one per transition..], "look": [..], "why": "<one sentence>"}
 
 """
 
@@ -43,16 +47,22 @@ def judge(cfg: dict, lines: list[dict], by_id: dict[int, Phrase], llm=chat, seed
     for line in lines:
         ph = by_id.get(int(line["p"])) if "p" in line and str(line["p"]).isdigit() else None
         text = line.get("words") or (ph.text if ph else line.get("say", ""))
-        items.append({"new_line": text, "original_context": _context(ph, by_id)})
+        item = {"new_line": text, "original_context": _context(ph, by_id)}
+        if ph is not None and ph.extra.get("visual"):
+            item["on_screen"] = describe(ph.extra["visual"])
+        items.append(item)
     if len(items) < 2:
-        return {"shift": [], "fit": [], "unexpected": 0.0, "congruent": 0.0, "score": 0.0, "why": "too short"}
+        return {"shift": [], "fit": [], "look": [], "unexpected": 0.0, "congruent": 0.0, "score": 0.0, "why": "too short"}
     msg = [{"role": "user", "content": PROMPT + json.dumps(items, indent=1)}]
     m = re.search(r"\{.*\}", llm(cfg, msg, temperature=0.0, seed=seed), re.S)
     data = json.loads(m.group(0)) if m else {}
     shift = [min(10, max(0, int(x))) for x in data.get("shift", [])][: len(items)]
     fit = [min(10, max(0, int(x))) for x in data.get("fit", [])][: len(items) - 1]
+    look = [min(10, max(0, int(x))) for x in data.get("look", [])][: len(items) - 1]
     unexpected = sum(shift) / (10 * len(items))  # missing scores count as 0
     congruent = sum(fit) / (10 * (len(items) - 1))
-    return {"shift": shift, "fit": fit, "unexpected": round(unexpected, 3),
+    if look and any("on_screen" in it for it in items):  # visual continuity counts half
+        congruent = (congruent + sum(look) / (10 * (len(items) - 1))) / 2
+    return {"shift": shift, "fit": fit, "look": look, "unexpected": round(unexpected, 3),
             "congruent": round(congruent, 3), "score": round(unexpected * congruent, 3),
             "why": str(data.get("why", ""))}

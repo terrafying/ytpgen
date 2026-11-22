@@ -56,6 +56,10 @@ CREATE TABLE IF NOT EXISTS words_phones (
 CREATE INDEX IF NOT EXISTS idx_phones_arpabet ON words_phones(arpabet);
 CREATE INDEX IF NOT EXISTS idx_phones_source ON words_phones(source_id);
 CREATE INDEX IF NOT EXISTS idx_words_source_start ON words(source_id, start_s);
+CREATE TABLE IF NOT EXISTS scene_tags (
+    scene_id INTEGER PRIMARY KEY REFERENCES scenes(id),
+    tags TEXT NOT NULL  -- JSON from analyze/tag.py: people, speaking, setting, shot
+);
 CREATE TABLE IF NOT EXISTS word_prefs (
     word_lower TEXT PRIMARY KEY,
     pref_source_id INTEGER NOT NULL REFERENCES sources(id),
