@@ -288,6 +288,7 @@ PLAY_MAX_FILMS = 4
 PLAY_MOODS = {  # button -> planner tone
     "silly": "funny",
     "deep": "deep",
+    "deadpan": "deadpan",
     "chaos": "chaotic and surreal: rapid non sequiturs, escalating absurdity, a voice that keeps "
              "interrupting itself, ending on the strangest possible line",
 }

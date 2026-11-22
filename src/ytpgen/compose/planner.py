@@ -39,6 +39,9 @@ TONES = {
              "callbacks and deadpan punchlines, the way a great YouTube Poop or sentence-mix does",
     "deep": "sober and unexpectedly profound: find a reading of these lines that says something true "
             "and a little unsettling about people, fear, love, technology or time",
+    "deadpan": "deadpan: earnest mid-century advice played completely straight until it lands as brutal "
+               "or absurd about the listener personally (e.g. 'people don't like you'); escalate the "
+               "personal judgement, never wink",
 }
 
 SYSTEM = """You compose new short spoken pieces by re-cutting old film footage. You may ONLY use
@@ -57,6 +60,9 @@ Rules:
 - When scenes are described (## headers say who is on screen), make the cuts make visual sense
   too: keep the same character on screen through a back-and-forth, cut to a matching or reaction
   shot, and only put a line over a mismatched face when that mismatch is the joke.
+- Use 2-4 STINGERS: a single word or two cut out of a real line ({{"p": <id>, "words": "but"}}) and
+  dropped in as an interjection: "But!", "Don't.", "No.", "Cover!", a name. They punctuate, interrupt
+  and reverse what was just said. Repeating a stinger or an earlier line later as a callback is good.
 - Aim for {n_lines} lines, about {seconds} seconds spoken. Order matters: setup, turn, payoff.
 - Tone: {tone}.
 {theme}
