@@ -21,14 +21,14 @@ logger = logging.getLogger(__name__)
 
 def make_piece(cfg: dict, db: Index, out: Path, tone: str = "funny", theme: str | None = None,
                source_ids: set[int] | None = None, seconds: int = 30, drafts: int = 4,
-               render: int = 2, max_wer: float = 0.35, seed: int = 0, bridges: int = 0,
+               render: int = 2, max_wer: float = 0.35, seed: int = 0, bridges: int = 0, found_only: bool = False,
                log=logger.info) -> list[dict]:
     """Draft, judge, render the top `render` drafts, verify; returns results best first (+ .plan.json)."""
     phrases = derive_phrases(db.conn, source_ids)
     if not phrases:
         raise RuntimeError("no phrases: ingest and analyze some films first")
     plans = make_plans(cfg, db, phrases, tone, theme, seconds=seconds, n=drafts, seed=seed,
-                       source_ids=source_ids)
+                       source_ids=source_ids, found_only=found_only)
     if not plans:
         raise RuntimeError("the planner produced no usable drafts (is the LLM server up?)")
     by_id = {p.id: p for p in phrases}

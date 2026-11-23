@@ -70,6 +70,21 @@ def test_make_plans_resolves_and_ranks(db):
     assert plans[1].missing == 1  # "zebra" isn't in the library
 
 
+def test_make_plans_found_only_drops_llm_words(db):
+    phrases = derive_phrases(db.conn)
+    seen = []
+    draft = {"title": "mixed", "lines": [{"p": 2}, {"say": "love"}, {"p": 1}]}
+
+    def llm(cfg, msgs, temperature, seed):
+        seen.append(msgs[0]["content"])
+        return json.dumps(draft)
+
+    plans = make_plans({}, db, phrases, "deep", None, n=1, llm=llm, found_only=True)
+    assert '"say"' not in seen[0] and "Never add words of your own" in seen[0]
+    assert plans[0].intended == "i love you the bomb is coming"  # the glue "love" was dropped
+    assert all(c.kind == "phrase" for c in plans[0].clips)
+
+
 def test_wer():
     assert wer("the bomb is coming", "the bomb is coming") == 0
     assert wer("the bomb is coming", "the bomb coming") == pytest.approx(0.25)

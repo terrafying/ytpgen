@@ -52,8 +52,7 @@ voices, so the message must emerge from what was really said.
 Rules:
 - Build the piece mostly from whole lines: {{"p": <id>}}.
 - You may use a contiguous part of a line: {{"p": <id>, "words": "<exact consecutive words from it>"}}.
-- Only when no line can carry the idea, add 1-3 glue words: {{"say": "<words>"}}. These are
-  stitched from single words or syllables and sound worse, so use them rarely.
+{glue}
 - Do NOT retell the original films. Pull lines out of their context and set them against lines
   from elsewhere (other scenes, other films) so they mean something new. Never use two lines
   that follow each other in the original. Draw on at least three different films, and no
@@ -158,13 +157,20 @@ def _listing(pool: list[Phrase]) -> str:
     return "\n".join(out)
 
 
-def build_prompt(phrases: list[Phrase], tone: str, theme: str | None, seconds: int, seed: int) -> list[dict]:
+GLUE = ('- Only when no line can carry the idea, add 1-3 glue words: {"say": "<words>"}. These are\n'
+        '  stitched from single words or syllables and sound worse, so use them rarely.')
+FOUND_ONLY = "- Never add words of your own: every line must be a real line or part of one."
+
+
+def build_prompt(phrases: list[Phrase], tone: str, theme: str | None, seconds: int, seed: int,
+                 found_only: bool = False) -> list[dict]:
     pool = phrases
     if len(pool) > MAX_PHRASES:
         pool = sorted(random.Random(seed).sample(pool, MAX_PHRASES), key=lambda p: p.id)
     listing = _listing(pool)
     system = SYSTEM.format(
         n_lines=max(4, seconds // 3), seconds=seconds, tone=TONES.get(tone, tone),
+        glue=FOUND_ONLY if found_only else GLUE,
         theme=f"- Theme to explore: {theme}." if theme else "- No theme given: find the most striking message the footage wants to say.",
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": "Footage lines:\n" + listing}]
@@ -193,11 +199,14 @@ def parse(reply: str) -> tuple[str, list[dict]]:
 
 def make_plans(cfg: dict, db: Index, phrases: list[Phrase], tone: str, theme: str | None,
                seconds: int = 30, n: int = 4, seed: int = 0, llm=chat,
-               source_ids: set[int] | None = None) -> list[Plan]:
-    """n LLM drafts, resolved and sorted by cutting cost (best first)."""
+               source_ids: set[int] | None = None, found_only: bool = False) -> list[Plan]:
+    """n LLM drafts, resolved and sorted by cutting cost (best first).
+
+    found_only: no LLM-written glue words; every word is a real line from the footage.
+    """
     by_id = {p.id: p for p in phrases}
     matcher = Matcher(cfg)
-    messages = build_prompt(phrases, tone, theme, seconds, seed)
+    messages = build_prompt(phrases, tone, theme, seconds, seed, found_only)
     plans: list[Plan] = []
     for k in range(n):
         try:
@@ -205,6 +214,8 @@ def make_plans(cfg: dict, db: Index, phrases: list[Phrase], tone: str, theme: st
         except Exception as exc:  # noqa: BLE001 - one bad draft shouldn't sink the batch
             logger.warning("draft %d failed: %s", k, exc)
             continue
+        if found_only:
+            lines = [l for l in lines if "p" in l]
         clips, intended, missing = resolve(lines, by_id, db, matcher, source_ids)
         if clips:
             plans.append(Plan(title, lines, clips, intended, missing, plan_cost(clips, missing)))
