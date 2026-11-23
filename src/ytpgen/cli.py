@@ -148,7 +148,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
     try:
         results = make_piece(cfg, db, Path(args.output), args.tone, args.theme, source_ids=source_ids,
                              seconds=args.seconds, drafts=args.drafts, render=args.render,
-                             max_wer=args.max_wer, seed=args.seed, log=print)
+                             max_wer=args.max_wer, seed=args.seed, bridges=args.bridges, log=print)
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -240,6 +240,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--max-wer", type=float, default=0.35)
     sp.add_argument("--seed", type=int, default=0)
     sp.add_argument("--films", nargs="+", help="only these films (video_id prefixes)")
+    sp.add_argument("--bridges", type=int, default=0, help="generate up to N video bridges between cuts (ComfyUI + Wan 2.2)")
     sp.add_argument("-o", "--output", default="outputs/plan.mp4")
     sp.set_defaults(func=cmd_plan)
 

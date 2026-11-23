@@ -6,6 +6,7 @@ import json
 import logging
 from pathlib import Path
 
+from ytpgen.compose.bridge import add_bridges
 from ytpgen.compose.edl import save_edl
 from ytpgen.compose.judge import judge
 from ytpgen.compose.matcher import Matcher
@@ -20,7 +21,8 @@ logger = logging.getLogger(__name__)
 
 def make_piece(cfg: dict, db: Index, out: Path, tone: str = "funny", theme: str | None = None,
                source_ids: set[int] | None = None, seconds: int = 30, drafts: int = 4,
-               render: int = 2, max_wer: float = 0.35, seed: int = 0, log=logger.info) -> list[dict]:
+               render: int = 2, max_wer: float = 0.35, seed: int = 0, bridges: int = 0,
+               log=logger.info) -> list[dict]:
     """Draft, judge, render the top `render` drafts, verify; returns results best first (+ .plan.json)."""
     phrases = derive_phrases(db.conn, source_ids)
     if not phrases:
@@ -41,6 +43,8 @@ def make_piece(cfg: dict, db: Index, out: Path, tone: str = "funny", theme: str 
     for k, plan in enumerate(plans[:render]):
         edl = Matcher.edl_from_clips(plan.clips, fps=cfg["compose"]["fps"],
                                      width=cfg["compose"]["width"], height=cfg["compose"]["height"])
+        if bridges:  # needs ComfyUI with Wan 2.2 and the GPU free of the planner LLM
+            edl = add_bridges(cfg, edl, bridges, seed=seed, log=log)
         path = out.with_name(f"{out.stem}.{k}{out.suffix}")
         save_edl(edl, path.with_suffix(".edl.json"))
         Renderer(cfg).render(edl, path)

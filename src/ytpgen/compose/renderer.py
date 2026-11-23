@@ -94,11 +94,15 @@ class Renderer:
     # per-event single-pass graph: extract + geometry + reverse + speed +
     # gain all in one -filter_complex
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _audio_start(ev: EDLEvent) -> float:
+        return ev.audio_start_s if ev.audio_path else ev.start_s
+
     def _level_db(self, ev: EDLEvent) -> float:
         """Gain that brings this clip's mean level to LEVEL_TARGET_DB (films differ by ~6 dB)."""
         proc = subprocess.run(
-            [self.ffmpeg, "-nostdin", "-hide_banner", "-ss", f"{max(0.0, ev.start_s):.6f}",
-             "-t", f"{ev.end_s - ev.start_s:.6f}", "-i", str(ev.local_path),
+            [self.ffmpeg, "-nostdin", "-hide_banner", "-ss", f"{max(0.0, self._audio_start(ev)):.6f}",
+             "-t", f"{ev.end_s - ev.start_s:.6f}", "-i", str(ev.audio_path or ev.local_path),
              "-vn", "-af", "volumedetect", "-f", "null", "-"],
             capture_output=True, text=True,
         )
@@ -111,13 +115,14 @@ class Renderer:
         """Return (filter_complex, vout_label) for one event."""
         vparts: list[str] = []
         apart: list[str] = []
+        a_in = "[1:a]" if ev.audio_path else "[0:a]"
 
         if ev.reverse:
             vparts.append("[0:v]reverse")
-            apart.append("[0:a]areverse")
+            apart.append(f"{a_in}areverse")
         else:
             vparts.append("[0:v]null")
-            apart.append("[0:a]anull")
+            apart.append(f"{a_in}anull")
 
         # audio speed before video setpts; both before geometry so pad/fps
         # operate on the final timeline
@@ -166,6 +171,8 @@ class Renderer:
             "-ss", f"{max(0.0, ev.start_s):.6f}",
             "-t", f"{duration:.6f}",
             "-i", str(ev.local_path),
+            *(["-ss", f"{max(0.0, ev.audio_start_s):.6f}", "-t", f"{duration:.6f}", "-i", str(ev.audio_path)]
+              if ev.audio_path else []),
             "-map", f"{vout}",
             "-map", "[aout]",
             "-filter_complex", fc,

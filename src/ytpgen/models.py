@@ -79,6 +79,8 @@ class EDLEvent(BaseModel):
     speed: float = 1.0
     gain_db: float = 0.0
     effects: list[str] = Field(default_factory=list)
+    audio_path: str | None = None  # sound from another file (J-cut under a generated bridge)
+    audio_start_s: float = 0.0
 
 
 class EDL(BaseModel):
