@@ -113,7 +113,8 @@ def plan_cost(clips: list[Clip], missing: int) -> float:
 
 
 def _words(text: str) -> list[str]:
-    return re.sub(r"[^a-z0-9' ]", " ", text.lower()).split()
+    # apostrophes dropped, not split: the index stores "it's" as "its" (analyze/segment.py _clean_token)
+    return re.sub(r"[^a-z0-9 ]", " ", re.sub(r"['’]", "", text.lower())).split()
 
 
 def resolve(lines: list[dict], phrases: dict[int, Phrase], db: Index, matcher: Matcher,

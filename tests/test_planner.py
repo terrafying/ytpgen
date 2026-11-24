@@ -165,3 +165,8 @@ def test_recite_prefers_longest_real_runs(db):
     assert report[0] == ("the bomb is coming", "phrase:4")
     assert report[-1] == ("zebra", "missing")
     assert clips[0].kind == "phrase"
+
+
+def test_words_drop_apostrophes_like_the_index():
+    from ytpgen.compose.planner import _words
+    assert _words("It's Anna’s TV, don't!") == ["its", "annas", "tv", "dont"]
