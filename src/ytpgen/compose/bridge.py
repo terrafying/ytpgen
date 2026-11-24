@@ -52,11 +52,15 @@ def frame_png(path: str, at_s: float, width: int, height: int) -> bytes:
     return proc.stdout
 
 
-def generate(cfg: dict, a_png: bytes, b_png: bytes, out: Path, width: int, height: int,
+def generate(cfg: dict, a_png: bytes, b_png: bytes | None, out: Path, width: int, height: int,
              prompt: str = PROMPT, frames: int = FRAMES, seed: int = 0, timeout_s: int = 900) -> Path:
-    """Render one silent bridge clip to *out* (16 fps)."""
+    """Render one silent bridge clip to *out* (16 fps). b_png=None: plain image-to-video from a_png."""
     wf = json.loads(WORKFLOW.read_text())
-    wf["11"]["inputs"]["image"], wf["12"]["inputs"]["image"] = _upload(cfg, a_png), _upload(cfg, b_png)
+    wf["11"]["inputs"]["image"] = _upload(cfg, a_png)
+    if b_png is None:
+        del wf["12"], wf["13"]["inputs"]["end_image"]
+    else:
+        wf["12"]["inputs"]["image"] = _upload(cfg, b_png)
     wf["8"]["inputs"]["text"] = prompt
     wf["13"]["inputs"].update(width=width, height=height, length=frames)
     wf["14"]["inputs"]["noise_seed"] = seed
