@@ -113,6 +113,34 @@ def cmd_generate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_recite(args: argparse.Namespace) -> int:
+    from ytpgen.compose.edl import save_edl
+    from ytpgen.compose.matcher import Matcher
+    from ytpgen.compose.phrases import derive_phrases
+    from ytpgen.compose.recite import cover
+    from ytpgen.compose.renderer import Renderer
+    from ytpgen.compose.verify import transcribe
+
+    cfg = _open_config(args)
+    db = _db(cfg)
+    source_ids = None
+    if args.films:
+        source_ids = {r["id"] for r in db.all_sources() if any(r["video_id"].startswith(f) for f in args.films)}
+    clips, report = cover(args.text, derive_phrases(db.conn, source_ids), db, Matcher(cfg), args.seed, source_ids)
+    for span, how in report:
+        print(f"  {how:>9}  {span}")
+    if not clips:
+        print("Nothing in the library says any of it.", file=sys.stderr)
+        return 1
+    edl = Matcher.edl_from_clips(clips, fps=cfg["compose"]["fps"],
+                                 width=cfg["compose"]["width"], height=cfg["compose"]["height"])
+    out = Path(args.output)
+    save_edl(edl, out.with_suffix(".edl.json"))
+    Renderer(cfg).render(edl, out)
+    print(f"output: {out}\nheard:  {transcribe(cfg, out).strip()}")
+    return 0
+
+
 def cmd_auto(args: argparse.Namespace) -> int:
     from ytpgen.compose.auto import AutoPooper
     from ytpgen.compose.edl import save_edl
@@ -224,6 +252,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("-o", "--output", default="outputs/ytp_output.mp4")
     sp.add_argument("--mode", choices=["word", "phone", "hybrid"], default="hybrid")
     sp.set_defaults(func=cmd_generate)
+
+    sp = sub.add_parser("recite", help="Say a fixed text (a quote): longest real runs of speech first")
+    sp.add_argument("text")
+    sp.add_argument("--films", nargs="+", help="only these films (video_id prefixes)")
+    sp.add_argument("--seed", type=int, default=0)
+    sp.add_argument("-o", "--output", default="outputs/recite.mp4")
+    sp.set_defaults(func=cmd_recite)
 
     sp = sub.add_parser("auto", help="Auto-generate a poop from one source")
     sp.add_argument("video_id")

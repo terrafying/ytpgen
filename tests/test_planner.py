@@ -9,6 +9,7 @@ import pytest
 from ytpgen.compose.matcher import Matcher
 from ytpgen.compose.phrases import derive_phrases
 from ytpgen.compose.planner import make_plans, phrase_clip, plan_cost
+from ytpgen.compose.recite import cover
 from ytpgen.compose.verify import wer
 from ytpgen.index import Index
 from ytpgen.models import Clip
@@ -156,3 +157,11 @@ def test_phrase_clip_never_zero_length(db):
     ph = Phrase(0, 1, "/m.mp4", ["but", "no"], [5.0, 5.0], [5.0, 5.2], prev_end_s=4.99, next_start_s=5.21)
     c = phrase_clip(ph, 0, 1)  # zero-length "but", hemmed in by neighbours
     assert c.end_s - c.start_s >= 0.15
+
+
+def test_recite_prefers_longest_real_runs(db):
+    phrases = derive_phrases(db.conn)
+    clips, report = cover("the bomb is coming zebra", phrases, db, Matcher({}))
+    assert report[0] == ("the bomb is coming", "phrase:4")
+    assert report[-1] == ("zebra", "missing")
+    assert clips[0].kind == "phrase"
