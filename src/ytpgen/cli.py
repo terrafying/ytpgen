@@ -134,7 +134,7 @@ def cmd_recite(args: argparse.Namespace) -> int:
     from ytpgen.compose.phrases import derive_phrases
     from ytpgen.compose.recite import cover
     from ytpgen.compose.renderer import Renderer
-    from ytpgen.compose.verify import transcribe
+    from ytpgen.compose.verify import transcribe, wer
 
     cfg = _open_config(args)
     db = _db(cfg)
@@ -142,19 +142,36 @@ def cmd_recite(args: argparse.Namespace) -> int:
     if source_ids is not None and not source_ids:
         print("No films match --films/--clean.", file=sys.stderr)
         return 1
-    clips, report = cover(args.text, derive_phrases(db.conn, source_ids), db, Matcher(cfg), args.seed, source_ids,
-                           mode="word" if args.whole_words else "hybrid")
-    for span, how in report:
-        print(f"  {how:>9}  {span}")
-    if not clips:
-        print("Nothing in the library says any of it.", file=sys.stderr)
-        return 1
-    edl = Matcher.edl_from_clips(clips, fps=cfg["compose"]["fps"],
-                                 width=cfg["compose"]["width"], height=cfg["compose"]["height"])
-    out = Path(args.output)
+    phrases, out, best = derive_phrases(db.conn, source_ids), Path(args.output), None
+    for k in range(max(1, args.tries)):  # each seed picks other takes of the same words; keep the take heard best
+        clips, report = cover(args.text, phrases, db, Matcher(cfg), args.seed + k, source_ids,
+                              mode="word" if args.whole_words else "hybrid")
+        if k == 0:
+            for span, how in report:
+                print(f"  {how:>9}  {span}")
+        if not clips:
+            print("Nothing in the library says any of it.", file=sys.stderr)
+            return 1
+        edl = Matcher.edl_from_clips(clips, fps=cfg["compose"]["fps"],
+                                     width=cfg["compose"]["width"], height=cfg["compose"]["height"])
+        take = out if args.tries <= 1 else out.with_name(f"{out.stem}.try{k}{out.suffix}")
+        Renderer(cfg).render(edl, take)
+        heard = transcribe(cfg, take).strip()
+        said = " ".join(span for span, how in report if how != "missing")  # judge only words someone actually said
+        err = wer(said, heard)
+        if args.tries > 1:
+            print(f"  seed {args.seed + k}: wer {err:.2f}  {heard}")
+        if best is None or err < best[0]:
+            best = (err, take, edl, heard)
+        if err == 0:
+            break
+    err, take, edl, heard = best
+    if take != out:
+        take.replace(out)
+        for k in range(args.tries):
+            out.with_name(f"{out.stem}.try{k}{out.suffix}").unlink(missing_ok=True)
     save_edl(edl, out.with_suffix(".edl.json"))
-    Renderer(cfg).render(edl, out)
-    print(f"output: {out}\nheard:  {transcribe(cfg, out).strip()}")
+    print(f"output: {out}\nheard:  {heard}")
     return 0
 
 
@@ -273,6 +290,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--films", nargs="+", help="only these films (video_id prefixes)")
     sp.add_argument("--clean", action="store_true", help="clean-cut tier: only <workspace>/clean_sources.txt sources")
     sp.add_argument("--seed", type=int, default=0)
+    sp.add_argument("--tries", type=int, default=1, help="re-roll up to N seeds until Whisper hears the text exactly")
     sp.add_argument("--whole-words", action="store_true",
                     help="only whole words people said: unsaid words are skipped (reported missing), never phone-spliced")
     sp.add_argument("-o", "--output", default="outputs/recite.mp4")

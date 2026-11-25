@@ -87,6 +87,7 @@ def test_make_plans_found_only_drops_llm_words(db):
 
 
 def test_wer():
+    assert wer("thats all", "That’s all.") == 0  # apostrophes dropped, like the index
     assert wer("the bomb is coming", "the bomb is coming") == 0
     assert wer("the bomb is coming", "the bomb coming") == pytest.approx(0.25)
     assert wer("a b", "") == 1.0

@@ -10,8 +10,8 @@ _model = None
 
 def wer(ref: str, hyp: str) -> float:
     """Word error rate of *hyp* against *ref* (Levenshtein over words)."""
-    r = re.sub(r"[^a-z0-9' ]", " ", ref.lower()).split()
-    h = re.sub(r"[^a-z0-9' ]", " ", hyp.lower()).split()
+    norm = lambda t: re.sub(r"[^a-z0-9 ]", " ", re.sub(r"['\u2019]", "", t.lower())).split()  # apostrophes dropped, like the index
+    r, h = norm(ref), norm(hyp)
     if not r:
         return 0.0 if not h else 1.0
     row = list(range(len(h) + 1))
