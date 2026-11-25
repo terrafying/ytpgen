@@ -136,7 +136,7 @@ def _fake_model(segments_words: list[list[tuple[str, float, float]]]) -> SimpleN
         for ws in segments_words
     ]
 
-    def transcribe(path, word_timestamps=False, language=None):
+    def transcribe(path, word_timestamps=False, language=None, **_):
         assert word_timestamps is True
         assert language == "en"
         return iter(segs), SimpleNamespace(language="en")
