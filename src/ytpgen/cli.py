@@ -142,7 +142,8 @@ def cmd_recite(args: argparse.Namespace) -> int:
     if source_ids is not None and not source_ids:
         print("No films match --films/--clean.", file=sys.stderr)
         return 1
-    clips, report = cover(args.text, derive_phrases(db.conn, source_ids), db, Matcher(cfg), args.seed, source_ids)
+    clips, report = cover(args.text, derive_phrases(db.conn, source_ids), db, Matcher(cfg), args.seed, source_ids,
+                           mode="word" if args.whole_words else "hybrid")
     for span, how in report:
         print(f"  {how:>9}  {span}")
     if not clips:
@@ -272,6 +273,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--films", nargs="+", help="only these films (video_id prefixes)")
     sp.add_argument("--clean", action="store_true", help="clean-cut tier: only <workspace>/clean_sources.txt sources")
     sp.add_argument("--seed", type=int, default=0)
+    sp.add_argument("--whole-words", action="store_true",
+                    help="only whole words people said: unsaid words are skipped (reported missing), never phone-spliced")
     sp.add_argument("-o", "--output", default="outputs/recite.mp4")
     sp.set_defaults(func=cmd_recite)
 

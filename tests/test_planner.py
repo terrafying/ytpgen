@@ -170,3 +170,11 @@ def test_recite_prefers_longest_real_runs(db):
 def test_words_drop_apostrophes_like_the_index():
     from ytpgen.compose.planner import _words
     assert _words("It's Anna’s TV, don't!") == ["its", "annas", "tv", "dont"]
+
+
+def test_recite_whole_words_never_asks_for_phones(db):
+    seen = []
+    m = Matcher({})
+    m.resolve_sentence = lambda text, db, mode, source_ids=None: seen.append(mode) or []
+    _, report = cover("the bomb is coming zebra", derive_phrases(db.conn), db, m, mode="word")
+    assert seen == ["word"] and report[-1] == ("zebra", "missing")

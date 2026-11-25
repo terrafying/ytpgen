@@ -18,8 +18,9 @@ from ytpgen.models import Clip
 
 
 def cover(text: str, phrases: list[Phrase], db: Index, matcher: Matcher, seed: int = 0,
-          source_ids: set[int] | None = None) -> tuple[list[Clip], list[tuple[str, str]]]:
-    """Clips that say *text*, plus a report [(span, "phrase:N words" | "matched" | "missing")]."""
+          source_ids: set[int] | None = None, mode: str = "hybrid") -> tuple[list[Clip], list[tuple[str, str]]]:
+    """Clips that say *text*, plus a report [(span, "phrase:N words" | "matched" | "missing")].
+    mode="word": a word nobody said is reported missing, never spliced from syllables/phones (those are unintelligible)."""
     rng = random.Random(seed)
     occ: dict[str, list[tuple[Phrase, int]]] = defaultdict(list)
     for ph in phrases:
@@ -45,7 +46,7 @@ def cover(text: str, phrases: list[Phrase], db: Index, matcher: Matcher, seed: i
             report.append((" ".join(words[i:i + n]), f"phrase:{n}"))
             i += n
             continue
-        got = matcher.resolve_sentence(words[i], db, mode="hybrid", source_ids=source_ids)
+        got = matcher.resolve_sentence(words[i], db, mode=mode, source_ids=source_ids)
         clips.extend(got)
         report.append((words[i], "matched" if got else "missing"))
         i += 1
