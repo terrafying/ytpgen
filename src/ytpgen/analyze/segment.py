@@ -293,6 +293,7 @@ class Segmenter:
                 [(source_id, s.start_s, s.end_s, s.label, s.score) for s in scenes],
             )
             result["scenes"] = len(scenes)
+            db.commit()  # before transcription: holding this write lock through a long Whisper run blocks `ytp tag` and the web UI
         except Exception as exc:  # noqa: BLE001 — one bad file must not kill a batch
             logger.error("Scene detection failed for %s: %s", video.local_path, exc)
             result["error"] = str(exc)
