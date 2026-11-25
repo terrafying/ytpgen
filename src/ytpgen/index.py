@@ -139,13 +139,10 @@ class Index:
         self._conn.commit()
 
     def analyze_source_ids(self) -> set[int]:
-        """Ids of sources that have both scenes and words indexed."""
-        return {
-            r[0]
-            for r in self._conn.execute(
-                "SELECT source_id FROM scenes INTERSECT SELECT source_id FROM words"
-            )
-        }
+        """Ids of sources already segmented. Scenes alone count: silent films legitimately have no words (or had junk
+        Whisper words deleted), and re-analyzing them renumbers their scenes, breaking every scene id that refers to them.
+        A transcription that crashed after the scenes commit needs an explicit `ytp analyze <video_id>`."""
+        return {r[0] for r in self._conn.execute("SELECT DISTINCT source_id FROM scenes")}
 
     # ------------------------------------------------------------------
     # Words / phones
