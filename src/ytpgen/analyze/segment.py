@@ -252,7 +252,10 @@ class Segmenter:
 
         model = self._load_model()
         segments, _info = model.transcribe(
-            _decode_audio(video_path), word_timestamps=True, language=self.language
+            _decode_audio(video_path), word_timestamps=True, language=self.language,
+            # a music-only opening makes Whisper emit "." and, conditioned on it, keep emitting "." for the whole film
+            # (Destination Earth: 0 -> 1273 words)
+            condition_on_previous_text=False,
         )
         # Collect raw tokens first so phonemization is one batch call.
         raw: list[tuple[str, float, float]] = []
