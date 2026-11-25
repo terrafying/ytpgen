@@ -78,6 +78,20 @@ def _clean_token(raw: str) -> str:
     return raw.translate(_PUNCT_TABLE).strip().lower()
 
 
+def _decode_audio(video_path: Path):  # noqa: ANN202 - np.ndarray | str
+    """16 kHz mono float32 samples decoded by ffmpeg. faster-whisper's own PyAV decode returns garbage for some files
+    (Prelinger .m4v: Whisper then hears only "." and the film gets 0 words); fall back to the path if ffmpeg fails."""
+    import numpy as np
+
+    try:
+        pcm = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(video_path), "-map", "0:a:0", "-ac", "1",
+                              "-ar", "16000", "-f", "s16le", "-"], capture_output=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError) as exc:
+        logger.warning("ffmpeg audio decode failed for %s (%s); letting faster-whisper decode", video_path, exc)
+        return str(video_path)
+    return np.frombuffer(pcm, np.int16).astype(np.float32) / 32768.0
+
+
 class Segmenter:
     """Scene detection + word/phone transcription in one analysis pass."""
 
@@ -238,7 +252,7 @@ class Segmenter:
 
         model = self._load_model()
         segments, _info = model.transcribe(
-            str(video_path), word_timestamps=True, language=self.language
+            _decode_audio(video_path), word_timestamps=True, language=self.language
         )
         # Collect raw tokens first so phonemization is one batch call.
         raw: list[tuple[str, float, float]] = []
