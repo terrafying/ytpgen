@@ -113,6 +113,21 @@ def cmd_generate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _source_ids(args: argparse.Namespace, cfg: dict, db) -> set[int] | None:
+    """--films (video_id prefixes) and --clean (only sources listed in <workspace>/clean_sources.txt:
+    public domain or otherwise licensed for commercial use; one video_id per line, # comments)."""
+    rows = db.all_sources()
+    keep = None
+    if getattr(args, "films", None):
+        keep = {r["id"] for r in rows if any(r["video_id"].startswith(f) for f in args.films)}
+    if getattr(args, "clean", False):
+        f = workspace_dir(cfg) / "clean_sources.txt"
+        listed = {l.split("#")[0].strip() for l in f.read_text().splitlines()} - {""} if f.exists() else set()
+        clean = {r["id"] for r in rows if r["video_id"] in listed}
+        keep = clean if keep is None else keep & clean
+    return keep
+
+
 def cmd_recite(args: argparse.Namespace) -> int:
     from ytpgen.compose.edl import save_edl
     from ytpgen.compose.matcher import Matcher
@@ -123,9 +138,10 @@ def cmd_recite(args: argparse.Namespace) -> int:
 
     cfg = _open_config(args)
     db = _db(cfg)
-    source_ids = None
-    if args.films:
-        source_ids = {r["id"] for r in db.all_sources() if any(r["video_id"].startswith(f) for f in args.films)}
+    source_ids = _source_ids(args, cfg, db)
+    if source_ids is not None and not source_ids:
+        print("No films match --films/--clean.", file=sys.stderr)
+        return 1
     clips, report = cover(args.text, derive_phrases(db.conn, source_ids), db, Matcher(cfg), args.seed, source_ids)
     for span, how in report:
         print(f"  {how:>9}  {span}")
@@ -167,12 +183,10 @@ def cmd_plan(args: argparse.Namespace) -> int:
 
     cfg = _open_config(args)
     db = _db(cfg)
-    source_ids = None
-    if args.films:  # video_id prefixes, e.g. --films ShyGuy DuckandC
-        source_ids = {r["id"] for r in db.all_sources() if any(r["video_id"].startswith(f) for f in args.films)}
-        if not source_ids:
-            print("No films match --films.", file=sys.stderr)
-            return 1
+    source_ids = _source_ids(args, cfg, db)  # --films ShyGuy DuckandC, --clean
+    if source_ids is not None and not source_ids:
+        print("No films match --films/--clean.", file=sys.stderr)
+        return 1
     try:
         results = make_piece(cfg, db, Path(args.output), args.tone, args.theme, source_ids=source_ids,
                              seconds=args.seconds, drafts=args.drafts, render=args.render,
@@ -256,6 +270,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("recite", help="Say a fixed text (a quote): longest real runs of speech first")
     sp.add_argument("text")
     sp.add_argument("--films", nargs="+", help="only these films (video_id prefixes)")
+    sp.add_argument("--clean", action="store_true", help="clean-cut tier: only <workspace>/clean_sources.txt sources")
     sp.add_argument("--seed", type=int, default=0)
     sp.add_argument("-o", "--output", default="outputs/recite.mp4")
     sp.set_defaults(func=cmd_recite)
@@ -275,6 +290,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--max-wer", type=float, default=0.35)
     sp.add_argument("--seed", type=int, default=0)
     sp.add_argument("--films", nargs="+", help="only these films (video_id prefixes)")
+    sp.add_argument("--clean", action="store_true", help="clean-cut tier: only <workspace>/clean_sources.txt sources")
     sp.add_argument("--found-only", action="store_true", help="no LLM-written glue words: only real lines")
     sp.add_argument("--bridges", type=int, default=0, help="generate up to N video bridges between cuts (ComfyUI + Wan 2.2)")
     sp.add_argument("-o", "--output", default="outputs/plan.mp4")
