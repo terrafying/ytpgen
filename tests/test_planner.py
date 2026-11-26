@@ -179,3 +179,11 @@ def test_recite_whole_words_never_asks_for_phones(db):
     m.resolve_sentence = lambda text, db, mode, source_ids=None: seen.append(mode) or []
     _, report = cover("the bomb is coming zebra", derive_phrases(db.conn), db, m, mode="word")
     assert seen == ["word"] and report[-1] == ("zebra", "missing")
+
+
+def test_recite_pauses_only_at_punctuation(db):
+    phrases = derive_phrases(db.conn)
+    clips, _ = cover("the bomb is coming. zebra", phrases, db, Matcher({}))
+    assert clips[0].pause
+    clips, _ = cover("the bomb is coming zebra", phrases, db, Matcher({}))
+    assert not clips[0].pause

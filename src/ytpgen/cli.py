@@ -154,6 +154,8 @@ def cmd_recite(args: argparse.Namespace) -> int:
             return 1
         edl = Matcher.edl_from_clips(clips, fps=cfg["compose"]["fps"],
                                      width=cfg["compose"]["width"], height=cfg["compose"]["height"])
+        for ev, c in zip(edl.events, clips):  # a beat of air only where the text pauses ("I. think." sounded robotic)
+            ev.effects = ["hold"] if c.pause else [e for e in ev.effects if e != "hold"]
         take = out if args.tries <= 1 else out.with_name(f"{out.stem}.try{k}{out.suffix}")
         Renderer(cfg).render(edl, take)
         heard = transcribe(cfg, take).strip()

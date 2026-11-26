@@ -65,6 +65,7 @@ class Clip(BaseModel):
     source_id: int = 0
     text: str = ""
     kind: str = "word"  # word | scene | auto
+    pause: bool = False  # recite: the text has punctuation right after this clip, so a beat of air follows it
 
 
 class EDLEvent(BaseModel):

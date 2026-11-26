@@ -8,6 +8,7 @@ phrases too; only words nobody said fall back to the word/phone matcher.
 from __future__ import annotations
 
 import random
+import re
 from collections import defaultdict
 
 from ytpgen.compose.matcher import Matcher
@@ -27,6 +28,11 @@ def cover(text: str, phrases: list[Phrase], db: Index, matcher: Matcher, seed: i
         for k, w in enumerate(ph.words):
             occ[w].append((ph, k))
     words = _words(text)
+    stops, n_seen = set(), 0  # word indices the text puts punctuation after (pauses go only there)
+    for tok in text.split():
+        n_seen += len(_words(tok))
+        if n_seen and re.search(r"[.,;:!?\u2026-]$", tok):
+            stops.add(n_seen - 1)
     clips: list[Clip] = []
     report: list[tuple[str, str]] = []
     i = 0
@@ -43,11 +49,14 @@ def cover(text: str, phrases: list[Phrase], db: Index, matcher: Matcher, seed: i
         if best:
             ph, k, n = rng.choice(best)
             clips.append(phrase_clip(ph, k, k + n))
+            clips[-1].pause = i + n - 1 in stops
             report.append((" ".join(words[i:i + n]), f"phrase:{n}"))
             i += n
             continue
         got = matcher.resolve_sentence(words[i], db, mode=mode, source_ids=source_ids)
         clips.extend(got)
+        if got:
+            got[-1].pause = i in stops
         report.append((words[i], "matched" if got else "missing"))
         i += 1
     return clips, report
